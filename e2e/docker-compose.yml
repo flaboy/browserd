@@ -1,0 +1,39 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until mc alias set local http://minio:9000 minio minio123; do sleep 1; done
+        mc mb -p local/private || true
+        mc anonymous set none local/private || true
+
+  browserd:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      - minio
+      - minio-init
+    environment:
+      BROWSERD_PORT: "7011"
+      BROWSERD_CDP_BASE_URL: "ws://browserd:9222/devtools/browser"
+      BROWSERD_WORKDIR: "/tmp/browserd"
+      BROWSERD_PROFILE_STORE: "s3"
+      BROWSERD_S3_ENDPOINT: "http://minio:9000"
+      BROWSERD_S3_REGION: "us-east-1"
+      BROWSERD_S3_ACCESS_KEY_ID: "minio"
+      BROWSERD_S3_SECRET_ACCESS_KEY: "minio123"
+      BROWSERD_S3_FORCE_PATH_STYLE: "true"
+    ports:
+      - "17011:7011"

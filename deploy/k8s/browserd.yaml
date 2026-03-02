@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browserd
+  labels:
+    app: browserd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: browserd
+  template:
+    metadata:
+      labels:
+        app: browserd
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: browserd
+          image: browserd:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 7011
+              name: http
+          env:
+            - name: BROWSERD_PORT
+              value: "7011"
+            - name: BROWSERD_CDP_BASE_URL
+              value: "ws://browserd:9222/devtools/browser"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: workdir
+              mountPath: /tmp
+      volumes:
+        - name: workdir
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browserd
+  labels:
+    app: browserd
+spec:
+  selector:
+    app: browserd
+  ports:
+    - name: http
+      port: 7011
+      targetPort: http
