@@ -1,11 +1,15 @@
 # browserd
 
-独立浏览器执行服务（与 `botworks` 解耦），提供 `use_browser` 运行时所需的最小 HTTP 接口。
+独立浏览器执行服务（与 `botworks` 解耦），提供 `use_browser` / `browser_use` 运行时所需的最小 HTTP 接口。
 
 ## 当前能力（V1）
 - `POST /v1/sessions`
 - `POST /v1/sessions/{runtimeSessionId}/commit`
 - `DELETE /v1/sessions/{runtimeSessionId}`
+- `POST /v1/sessions/{runtimeSessionId}/navigate`
+- `GET /v1/sessions/{runtimeSessionId}/snapshot`
+- `POST /v1/sessions/{runtimeSessionId}/act`
+- `POST /v1/sessions/{runtimeSessionId}/screenshot`
 - profile 存储约定：每个 BrowserSession 单文件 `profile.tgz`（同 key 覆盖）
 
 ## 本地运行
@@ -57,3 +61,82 @@ Content-Type: application/json
 ```http
 DELETE /v1/sessions/{runtimeSessionId}
 ```
+
+### Navigate
+```http
+POST /v1/sessions/{runtimeSessionId}/navigate
+Content-Type: application/json
+
+{
+  "url": "https://www.baidu.com/",
+  "waitUntil": "load",
+  "timeoutMs": 30000
+}
+```
+
+### Snapshot
+```http
+GET /v1/sessions/{runtimeSessionId}/snapshot?mode=refs
+```
+
+响应示例：
+
+```json
+{
+  "data": {
+    "snapshotId": "snap_123",
+    "page": {
+      "url": "https://www.baidu.com/",
+      "title": "百度一下，你就知道",
+      "groups": {
+        "buttons": {
+          "columns": ["ref", "tag", "text"],
+          "rows": [["e13", "BUTTON", "百度一下"]]
+        },
+        "texts": {
+          "columns": ["ref", "tag", "text", "textLength"],
+          "rows": [["t1", "DIV", "点我去文心助手回答，已接入DeepSeek...", 26]]
+        }
+      }
+    }
+  },
+  "error": null
+}
+```
+
+约束：
+- `snapshot.page` 是唯一页面阅读结构
+- 对外只暴露 `ref`
+- `e*` 表示可操作元素
+- `t*` 表示只读文本块
+
+### Act
+```http
+POST /v1/sessions/{runtimeSessionId}/act
+Content-Type: application/json
+
+{
+  "action": "click",
+  "ref": "e13"
+}
+```
+
+约束：
+- `click` / `type` / `fill` / `press` / `hover` / `select` / `waitFor` 只接受 `e*`
+- `scrollIntoView` 接受 `e*` 与 `t*`
+- 对 `t*` 执行 `click` 会返回 `INVALID_REF`
+
+### Screenshot
+```http
+POST /v1/sessions/{runtimeSessionId}/screenshot
+Content-Type: application/json
+
+{
+  "ref": "t1",
+  "format": "png"
+}
+```
+
+约束：
+- 不带 `ref` 时返回全页截图
+- 带 `ref` 时可对 `e*` 与 `t*` 截图

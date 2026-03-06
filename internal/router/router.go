@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"strings"
 
+	"browserd/internal/browser"
 	"browserd/internal/config"
 	"browserd/internal/controller"
 	"browserd/internal/profile"
+	"browserd/internal/runtime"
 	"browserd/internal/session"
 	"browserd/internal/types"
 )
@@ -37,7 +39,8 @@ func New(cfg config.Config) http.Handler {
 		Workdir:    cfg.Workdir,
 		CDPBaseURL: cfg.CDPBaseURL,
 	})
-	handler := controller.NewSessionController(manager, cfg.CDPBaseURL)
+	browserSvc := browser.NewService(manager, runtime.NewState())
+	handler := controller.NewSessionController(manager, browserSvc, cfg.CDPBaseURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -62,6 +65,38 @@ func New(cfg config.Config) http.Handler {
 				return
 			}
 			handler.DeleteSession(w, r, id)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/navigate"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/navigate"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.Navigate(w, r, id)
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/snapshot"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/snapshot"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.Snapshot(w, r, id)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/act"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/act"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.Act(w, r, id)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/screenshot"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/screenshot"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.Screenshot(w, r, id)
 			return
 		default:
 			types.WriteErr(w, http.StatusNotFound, "NOT_FOUND", "route not found")

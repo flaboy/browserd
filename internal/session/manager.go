@@ -44,6 +44,15 @@ type CommitOutput struct {
 	DurationMs int64  `json:"durationMs"`
 }
 
+type SessionInfo struct {
+	RuntimeSessionID string
+	ProfilePath      string
+	ProfileDir       string
+	Version          string
+	LeaseID          string
+	ExpiresAt        time.Time
+}
+
 type runtimeSession struct {
 	RuntimeSessionID string
 	ProfilePath      string
@@ -57,6 +66,7 @@ type Manager interface {
 	Create(input CreateInput) (CreateOutput, error)
 	Commit(runtimeSessionID string, input CommitInput) (CommitOutput, error)
 	Delete(runtimeSessionID string) error
+	Get(runtimeSessionID string) (SessionInfo, error)
 }
 
 type ManagerOptions struct {
@@ -217,4 +227,26 @@ func (m *manager) Delete(runtimeSessionID string) error {
 
 	_ = os.RemoveAll(filepath.Dir(s.ProfileDir))
 	return nil
+}
+
+func (m *manager) Get(runtimeSessionID string) (SessionInfo, error) {
+	if strings.TrimSpace(runtimeSessionID) == "" {
+		return SessionInfo{}, ErrInvalidRequest
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[runtimeSessionID]
+	if !ok {
+		return SessionInfo{}, ErrSessionNotFound
+	}
+	return SessionInfo{
+		RuntimeSessionID: s.RuntimeSessionID,
+		ProfilePath:      s.ProfilePath,
+		ProfileDir:       s.ProfileDir,
+		Version:          s.Version,
+		LeaseID:          s.LeaseID,
+		ExpiresAt:        s.ExpiresAt,
+	}, nil
 }

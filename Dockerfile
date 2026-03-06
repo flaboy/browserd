@@ -14,6 +14,8 @@ RUN apk add --no-cache \
     nss \
     freetype \
     harfbuzz \
+    fontconfig \
+    font-noto-cjk \
     ca-certificates \
     ttf-freefont
 RUN addgroup -S app && adduser -S app -G app
