@@ -1,7 +1,10 @@
 package browser
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	browserrt "browserd/internal/runtime"
 )
@@ -25,6 +28,29 @@ func TestBuildChromeArgs_IncludesNoSandboxAndProfileDir(t *testing.T) {
 	}
 	if !hasUserDataDir {
 		t.Fatalf("expected user-data-dir arg")
+	}
+}
+
+func TestWaitForDevToolsWS_ReturnsWebSocketURLFromActivePortFile(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "DevToolsActivePort"), []byte("12345\n/devtools/browser/abc\n"), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := waitForDevToolsWS(dir, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected ready websocket, got %v", err)
+	}
+	if got != "ws://127.0.0.1:12345/devtools/browser/abc" {
+		t.Fatalf("unexpected ws url: %s", got)
+	}
+}
+
+func TestBuildChromeArgs_KeepsAboutBlankBootstrapPage(t *testing.T) {
+	args := buildChromeArgs("/tmp/profile")
+	if args[len(args)-1] != "about:blank" {
+		t.Fatalf("expected about:blank bootstrap page, got %+v", args)
 	}
 }
 
