@@ -17,6 +17,9 @@ import (
 )
 
 type fakeBrowserRuntime struct {
+	prepareErr    error
+	prepareCalls  []string
+	closeCalls    []string
 	navigateOut   browser.NavigateOutput
 	navigateErr   error
 	snapshotOut   browser.SnapshotOutput
@@ -27,7 +30,15 @@ type fakeBrowserRuntime struct {
 	screenshotErr error
 }
 
-func (f *fakeBrowserRuntime) Close(_ string) error { return nil }
+func (f *fakeBrowserRuntime) PrepareSession(runtimeSessionID string) error {
+	f.prepareCalls = append(f.prepareCalls, runtimeSessionID)
+	return f.prepareErr
+}
+
+func (f *fakeBrowserRuntime) Close(runtimeSessionID string) error {
+	f.closeCalls = append(f.closeCalls, runtimeSessionID)
+	return nil
+}
 
 func (f *fakeBrowserRuntime) Navigate(_ string, _ browser.NavigateInput) (browser.NavigateOutput, error) {
 	return f.navigateOut, f.navigateErr
@@ -46,8 +57,10 @@ func (f *fakeBrowserRuntime) Screenshot(_ string, _ browser.ScreenshotInput) (br
 }
 
 type fakeSessionManager struct {
-	createOut session.CreateOutput
-	createErr error
+	createOut   session.CreateOutput
+	createErr   error
+	deleteCalls []string
+	deleteErr   error
 }
 
 func (f *fakeSessionManager) Create(_ session.CreateInput) (session.CreateOutput, error) {
@@ -58,8 +71,9 @@ func (f *fakeSessionManager) Commit(_ string, _ session.CommitInput) (session.Co
 	return session.CommitOutput{}, errors.New("not implemented")
 }
 
-func (f *fakeSessionManager) Delete(_ string) error {
-	return errors.New("not implemented")
+func (f *fakeSessionManager) Delete(runtimeSessionID string) error {
+	f.deleteCalls = append(f.deleteCalls, runtimeSessionID)
+	return f.deleteErr
 }
 
 func (f *fakeSessionManager) Get(_ string) (session.SessionInfo, error) {
@@ -92,6 +106,66 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 	cdp := data["cdpWsUrl"].(string)
 	if !strings.HasPrefix(cdp, "ws://browserd:9222/devtools/browser/rt_") {
 		t.Fatalf("unexpected cdpWsUrl: %s", cdp)
+	}
+}
+
+func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
+	manager := &fakeSessionManager{
+		createOut: session.CreateOutput{
+			RuntimeSessionID: "rt_1",
+			CDPWsURL:         "ws://browserd:9222/devtools/browser/rt_1",
+			LeaseID:          "lease_1",
+			ResolvedVersion:  "new",
+		},
+	}
+	browserRuntime := &fakeBrowserRuntime{}
+	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	controller.CreateSession(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.prepareCalls) != 1 || browserRuntime.prepareCalls[0] != "rt_1" {
+		t.Fatalf("expected prepare to run before returning, got %+v", browserRuntime.prepareCalls)
+	}
+	if manager.deleteCalls != nil {
+		t.Fatalf("did not expect delete on success, got %+v", manager.deleteCalls)
+	}
+}
+
+func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
+	manager := &fakeSessionManager{
+		createOut: session.CreateOutput{
+			RuntimeSessionID: "rt_1",
+			CDPWsURL:         "ws://browserd:9222/devtools/browser/rt_1",
+		},
+	}
+	browserRuntime := &fakeBrowserRuntime{
+		prepareErr: errors.New("devtools websocket not ready"),
+	}
+	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	controller.CreateSession(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.deleteCalls) != 1 || manager.deleteCalls[0] != "rt_1" {
+		t.Fatalf("expected session cleanup, got %+v", manager.deleteCalls)
+	}
+	if len(browserRuntime.closeCalls) != 1 || browserRuntime.closeCalls[0] != "rt_1" {
+		t.Fatalf("expected browser close on prepare failure, got %+v", browserRuntime.closeCalls)
 	}
 }
 

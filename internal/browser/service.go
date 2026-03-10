@@ -140,6 +140,11 @@ func NewService(sessions session.Manager, state *browserrt.State) *Service {
 	}
 }
 
+func (s *Service) PrepareSession(runtimeSessionID string) error {
+	_, err := s.ensureBrowser(runtimeSessionID)
+	return err
+}
+
 func (s *Service) Close(runtimeSessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

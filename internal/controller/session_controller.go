@@ -19,6 +19,7 @@ type SessionController struct {
 }
 
 type browserRuntime interface {
+	PrepareSession(runtimeSessionID string) error
 	Close(runtimeSessionID string) error
 	Navigate(runtimeSessionID string, input browser.NavigateInput) (browser.NavigateOutput, error)
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
@@ -79,6 +80,14 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
+	}
+	if h.browser != nil {
+		if err := h.browser.PrepareSession(out.RuntimeSessionID); err != nil {
+			_ = h.browser.Close(out.RuntimeSessionID)
+			_ = h.manager.Delete(out.RuntimeSessionID)
+			types.WriteErr(w, http.StatusServiceUnavailable, "SESSION_INIT_FAILED", err.Error())
+			return
+		}
 	}
 	types.WriteOK(w, http.StatusOK, out)
 }
