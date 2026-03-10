@@ -47,6 +47,12 @@ Content-Type: application/json
 }
 ```
 
+`POST /v1/sessions` 是同步初始化接口：
+- 返回 200 前，Chromium 已启动且 DevTools websocket 已 ready
+- Chromium 仍以 `about:blank` 启动，不额外执行首屏 navigate
+- 若 readiness 失败，接口返回 `503 SESSION_INIT_FAILED`
+- 失败时不会保留可继续使用的 `runtimeSessionId`
+
 ### Commit
 ```http
 POST /v1/sessions/{runtimeSessionId}/commit

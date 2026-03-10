@@ -22,6 +22,12 @@ func TestReadPageSmoke_BaiduSnapshotPage(t *testing.T) {
 		t.Fatalf("create status=%d err=%v", status, createEnv.Error)
 	}
 	runtimeSessionID := fmt.Sprint(createEnv.Data["runtimeSessionId"])
+	if runtimeSessionID == "" || runtimeSessionID == "<nil>" {
+		t.Fatalf("expected runtimeSessionId, got %+v", createEnv.Data)
+	}
+	if cdpWSURL := fmt.Sprint(createEnv.Data["cdpWsUrl"]); cdpWSURL == "" || cdpWSURL == "<nil>" {
+		t.Fatalf("expected cdpWsUrl, got %+v", createEnv.Data)
+	}
 	t.Cleanup(func() {
 		_, _ = mustDoJSON(t, http.MethodDelete, base+"/v1/sessions/"+runtimeSessionID, nil)
 	})

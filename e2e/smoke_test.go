@@ -61,6 +61,14 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 		t.Fatalf("expected resolvedVersion=new, got %v", createEnv.Data["resolvedVersion"])
 	}
 	runtimeSessionID := fmt.Sprint(createEnv.Data["runtimeSessionId"])
+	status, navEnv := mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID+"/navigate", map[string]any{
+		"url":       "https://example.com/",
+		"waitUntil": "load",
+		"timeoutMs": 30000,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("navigate after create status=%d err=%v", status, navEnv.Error)
+	}
 
 	commitURL := base + "/v1/sessions/" + runtimeSessionID + "/commit"
 	status, commitEnv := mustDoJSON(t, http.MethodPost, commitURL, map[string]any{
@@ -82,6 +90,14 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 		t.Fatalf("create2 status=%d err=%v", status, create2Env.Error)
 	}
 	runtimeSessionID2 := fmt.Sprint(create2Env.Data["runtimeSessionId"])
+	status, navEnv = mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID2+"/navigate", map[string]any{
+		"url":       "https://example.com/",
+		"waitUntil": "load",
+		"timeoutMs": 30000,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("navigate after create2 status=%d err=%v", status, navEnv.Error)
+	}
 
 	status, conflictEnv := mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID2+"/commit", map[string]any{
 		"ifMatchVersion": "new",
