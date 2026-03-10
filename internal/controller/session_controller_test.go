@@ -12,6 +12,7 @@ import (
 	"browserd/internal/browser"
 	"browserd/internal/config"
 	"browserd/internal/controller"
+	"browserd/internal/profile"
 	"browserd/internal/router"
 	"browserd/internal/session"
 )
@@ -81,7 +82,12 @@ func (f *fakeSessionManager) Get(_ string) (session.SessionInfo, error) {
 }
 
 func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
-	h := router.New(config.Config{Port: 7011, CDPBaseURL: "ws://browserd:9222/devtools/browser"})
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	body := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
@@ -90,7 +96,7 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
+	handler.CreateSession(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
@@ -169,8 +175,39 @@ func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
 	}
 }
 
+func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{prepareErr: errors.New("devtools websocket not ready")}
+	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	controller.CreateSession(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, runtimeSessionID := range browserRuntime.prepareCalls {
+		if _, err := manager.Get(runtimeSessionID); err == nil {
+			t.Fatalf("expected failed create session to be removed: %s", runtimeSessionID)
+		}
+	}
+}
+
 func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
-	h := router.New(config.Config{Port: 7011, CDPBaseURL: "ws://browserd:9222/devtools/browser"})
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
@@ -178,7 +215,7 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
 	crr := httptest.NewRecorder()
-	h.ServeHTTP(crr, creq)
+	handler.CreateSession(crr, creq)
 	if crr.Code != http.StatusOK {
 		t.Fatalf("create expected 200, got %d body=%s", crr.Code, crr.Body.String())
 	}
@@ -191,14 +228,19 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/commit", bytes.NewReader(commit))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
+	handler.CommitSession(rr, req, rid)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
 func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
-	h := router.New(config.Config{Port: 7011, CDPBaseURL: "ws://browserd:9222/devtools/browser"})
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
@@ -206,7 +248,7 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
 	crr := httptest.NewRecorder()
-	h.ServeHTTP(crr, creq)
+	handler.CreateSession(crr, creq)
 	if crr.Code != http.StatusOK {
 		t.Fatalf("create expected 200, got %d body=%s", crr.Code, crr.Body.String())
 	}
@@ -220,7 +262,7 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/commit", bytes.NewReader(commit1))
 	req1.Header.Set("Content-Type", "application/json")
 	rr1 := httptest.NewRecorder()
-	h.ServeHTTP(rr1, req1)
+	handler.CommitSession(rr1, req1, rid)
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("first commit expected 200, got %d body=%s", rr1.Code, rr1.Body.String())
 	}
@@ -230,7 +272,7 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/commit", bytes.NewReader(commit2))
 	req2.Header.Set("Content-Type", "application/json")
 	rr2 := httptest.NewRecorder()
-	h.ServeHTTP(rr2, req2)
+	handler.CommitSession(rr2, req2, rid)
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d body=%s", rr2.Code, rr2.Body.String())
 	}
