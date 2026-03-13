@@ -1,6 +1,8 @@
 package browser
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +10,22 @@ import (
 
 	browserrt "browserd/internal/runtime"
 )
+
+type fakeAssetStore struct {
+	puts []fakeAssetPut
+	err  error
+}
+
+type fakeAssetPut struct {
+	URI         string
+	Body        []byte
+	ContentType string
+}
+
+func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, contentType string) error {
+	f.puts = append(f.puts, fakeAssetPut{URI: uri, Body: append([]byte(nil), body...), ContentType: contentType})
+	return f.err
+}
 
 func TestBuildChromeArgs_IncludesNoSandboxAndProfileDir(t *testing.T) {
 	args := buildChromeArgs("/tmp/profile")
@@ -97,5 +115,64 @@ func TestValidateActionRef_AllowsTextRefForScrollIntoView(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("expected scrollIntoView to allow text refs, got %v", err)
+	}
+}
+
+func TestUploadAfterNavigate_UploadsScreenshotWhenS3PathProvided(t *testing.T) {
+	store := &fakeAssetStore{}
+	svc := &Service{
+		assets: store,
+		capturePNG: func(context.Context) ([]byte, error) {
+			return []byte("png-bytes"), nil
+		},
+	}
+
+	err := svc.uploadAfterNavigate(context.Background(), "s3://browserd-snapshots/team_1/conv_1/1737373333.png")
+	if err != nil {
+		t.Fatalf("uploadAfterNavigate returned error: %v", err)
+	}
+	if len(store.puts) != 1 {
+		t.Fatalf("expected one put, got %+v", store.puts)
+	}
+	if store.puts[0].URI != "s3://browserd-snapshots/team_1/conv_1/1737373333.png" {
+		t.Fatalf("unexpected upload uri: %+v", store.puts[0])
+	}
+	if store.puts[0].ContentType != "image/png" {
+		t.Fatalf("unexpected content type: %+v", store.puts[0])
+	}
+	if string(store.puts[0].Body) != "png-bytes" {
+		t.Fatalf("unexpected body: %+v", store.puts[0])
+	}
+}
+
+func TestUploadAfterNavigate_UsesRequestedBucketInsteadOfProfileBucket(t *testing.T) {
+	store := &fakeAssetStore{}
+	svc := &Service{
+		assets: store,
+		capturePNG: func(context.Context) ([]byte, error) {
+			return []byte("png-bytes"), nil
+		},
+	}
+
+	err := svc.uploadAfterNavigate(context.Background(), "s3://separate-snapshot-bucket/team_1/conv_1/1737373333.png")
+	if err != nil {
+		t.Fatalf("uploadAfterNavigate returned error: %v", err)
+	}
+	if len(store.puts) != 1 || store.puts[0].URI != "s3://separate-snapshot-bucket/team_1/conv_1/1737373333.png" {
+		t.Fatalf("expected requested snapshot bucket to be used, got %+v", store.puts)
+	}
+}
+
+func TestUploadAfterNavigate_ReturnsCaptureError(t *testing.T) {
+	svc := &Service{
+		assets: &fakeAssetStore{},
+		capturePNG: func(context.Context) ([]byte, error) {
+			return nil, errors.New("capture failed")
+		},
+	}
+
+	err := svc.uploadAfterNavigate(context.Background(), "s3://browserd-snapshots/team_1/conv_1/1737373333.png")
+	if err == nil || err.Error() != "capture failed" {
+		t.Fatalf("expected capture failure, got %v", err)
 	}
 }

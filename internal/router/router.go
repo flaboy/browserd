@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"browserd/internal/assets"
 	"browserd/internal/browser"
 	"browserd/internal/config"
 	"browserd/internal/controller"
@@ -39,7 +40,20 @@ func New(cfg config.Config) http.Handler {
 		Workdir:    cfg.Workdir,
 		CDPBaseURL: cfg.CDPBaseURL,
 	})
-	browserSvc := browser.NewService(manager, runtime.NewState())
+	var assetStore assets.Store
+	assetS3Store, err := assets.NewS3Store(assets.S3StoreConfig{
+		Endpoint:        cfg.S3Endpoint,
+		Region:          cfg.S3Region,
+		AccessKeyID:     cfg.S3AccessKeyID,
+		SecretAccessKey: cfg.S3SecretAccessKey,
+		ForcePathStyle:  cfg.S3ForcePathStyle,
+	})
+	if err != nil {
+		log.Printf("browserd: init asset s3 store failed, screenshot uploads disabled: %v", err)
+	} else {
+		assetStore = assetS3Store
+	}
+	browserSvc := browser.NewService(manager, runtime.NewState(), assetStore)
 	handler := controller.NewSessionController(manager, browserSvc, cfg.CDPBaseURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

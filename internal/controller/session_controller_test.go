@@ -21,6 +21,7 @@ type fakeBrowserRuntime struct {
 	prepareErr    error
 	prepareCalls  []string
 	closeCalls    []string
+	navigateCalls []browser.NavigateInput
 	navigateOut   browser.NavigateOutput
 	navigateErr   error
 	snapshotOut   browser.SnapshotOutput
@@ -41,7 +42,8 @@ func (f *fakeBrowserRuntime) Close(runtimeSessionID string) error {
 	return nil
 }
 
-func (f *fakeBrowserRuntime) Navigate(_ string, _ browser.NavigateInput) (browser.NavigateOutput, error) {
+func (f *fakeBrowserRuntime) Navigate(_ string, input browser.NavigateInput) (browser.NavigateOutput, error) {
+	f.navigateCalls = append(f.navigateCalls, input)
 	return f.navigateOut, f.navigateErr
 }
 
@@ -275,6 +277,40 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	handler.CommitSession(rr2, req2, rid)
 	if rr2.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d body=%s", rr2.Code, rr2.Body.String())
+	}
+}
+
+func TestNavigate_ForwardsAfterLoadScreenshotS3Path(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{
+		navigateOut: browser.NavigateOutput{
+			URL:             "https://news.163.com/",
+			Title:           "News",
+			SnapshotCleared: true,
+		},
+	}
+	handler := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/navigate", bytes.NewReader([]byte(`{
+		"url":"https://news.163.com",
+		"waitUntil":"load",
+		"afterLoadScreenshotS3Path":"s3://browserd-snapshots/team_1/conv_1/1737373333.png"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Navigate(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.navigateCalls) != 1 {
+		t.Fatalf("expected one navigate call, got %+v", browserRuntime.navigateCalls)
+	}
+	got := browserRuntime.navigateCalls[0]
+	if got.AfterLoadScreenshotS3Path != "s3://browserd-snapshots/team_1/conv_1/1737373333.png" {
+		t.Fatalf("unexpected afterLoadScreenshotS3Path: %+v", got)
+	}
+	if got.URL != "https://news.163.com" || got.WaitUntil != "load" {
+		t.Fatalf("unexpected navigate input: %+v", got)
 	}
 }
 

@@ -76,9 +76,15 @@ Content-Type: application/json
 {
   "url": "https://www.baidu.com/",
   "waitUntil": "load",
-  "timeoutMs": 30000
+  "timeoutMs": 30000,
+  "afterLoadScreenshotS3Path": "s3://browserd-snapshots/team_1/conv_1/1737373333.png"
 }
 ```
+
+说明：
+- `navigate` 是唯一的页面跳转接口，不新增 `relocation` 同义接口。
+- `afterLoadScreenshotS3Path` 为可选字段，必须传完整 `s3://bucket/key`。
+- 截图 bucket 不从 `s3ProfilePath` 推导，允许与 userdata bucket 不同。
 
 ### Snapshot
 ```http

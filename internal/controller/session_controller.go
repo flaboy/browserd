@@ -43,9 +43,10 @@ type commitSessionRequest struct {
 }
 
 type navigateRequest struct {
-	URL       string `json:"url"`
-	WaitUntil string `json:"waitUntil,omitempty"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
+	URL                       string `json:"url"`
+	WaitUntil                 string `json:"waitUntil,omitempty"`
+	TimeoutMs                 int    `json:"timeoutMs,omitempty"`
+	AfterLoadScreenshotS3Path string `json:"afterLoadScreenshotS3Path,omitempty"`
 }
 
 type actRequest struct {
@@ -147,9 +148,10 @@ func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, run
 		return
 	}
 	out, err := h.browser.Navigate(runtimeSessionID, browser.NavigateInput{
-		URL:       req.URL,
-		WaitUntil: req.WaitUntil,
-		TimeoutMs: req.TimeoutMs,
+		URL:                       req.URL,
+		WaitUntil:                 req.WaitUntil,
+		TimeoutMs:                 req.TimeoutMs,
+		AfterLoadScreenshotS3Path: req.AfterLoadScreenshotS3Path,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)

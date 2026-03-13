@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"browserd/internal/assets"
 	browserrt "browserd/internal/runtime"
 	"browserd/internal/session"
 
@@ -27,9 +28,10 @@ var (
 )
 
 type NavigateInput struct {
-	URL       string
-	WaitUntil string
-	TimeoutMs int
+	URL                       string
+	WaitUntil                 string
+	TimeoutMs                 int
+	AfterLoadScreenshotS3Path string
 }
 
 type NavigateOutput struct {
@@ -100,9 +102,11 @@ type ScreenshotOutput struct {
 type Service struct {
 	sessions session.Manager
 	state    *browserrt.State
+	assets   assets.Store
 
-	mu       sync.Mutex
-	browsers map[string]*activeBrowser
+	capturePNG func(context.Context) ([]byte, error)
+	mu         sync.Mutex
+	browsers   map[string]*activeBrowser
 }
 
 type activeBrowser struct {
@@ -129,14 +133,16 @@ type snapshotRow struct {
 	TextLength  int    `json:"textLength"`
 }
 
-func NewService(sessions session.Manager, state *browserrt.State) *Service {
+func NewService(sessions session.Manager, state *browserrt.State, assetStore assets.Store) *Service {
 	if state == nil {
 		state = browserrt.NewState()
 	}
 	return &Service{
-		sessions: sessions,
-		state:    state,
-		browsers: map[string]*activeBrowser{},
+		sessions:   sessions,
+		state:      state,
+		assets:     assetStore,
+		capturePNG: capturePagePNG,
+		browsers:   map[string]*activeBrowser{},
 	}
 }
 
@@ -189,6 +195,9 @@ func (s *Service) Navigate(runtimeSessionID string, input NavigateInput) (Naviga
 	); err != nil {
 		return NavigateOutput{}, fmt.Errorf("%w: %v", ErrNavigationFailed, err)
 	}
+	if err := s.uploadAfterNavigate(ctx, input.AfterLoadScreenshotS3Path); err != nil {
+		return NavigateOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
+	}
 
 	s.state.ClearSnapshot(runtimeSessionID)
 	return NavigateOutput{
@@ -196,6 +205,32 @@ func (s *Service) Navigate(runtimeSessionID string, input NavigateInput) (Naviga
 		Title:           title,
 		SnapshotCleared: true,
 	}, nil
+}
+
+func (s *Service) uploadAfterNavigate(ctx context.Context, s3Path string) error {
+	s3Path = strings.TrimSpace(s3Path)
+	if s3Path == "" {
+		return nil
+	}
+	if s.assets == nil {
+		return fmt.Errorf("asset store not configured")
+	}
+	if s.capturePNG == nil {
+		return fmt.Errorf("screenshot capture not configured")
+	}
+	png, err := s.capturePNG(ctx)
+	if err != nil {
+		return err
+	}
+	return s.assets.Put(ctx, s3Path, png, "image/png")
+}
+
+func capturePagePNG(ctx context.Context) ([]byte, error) {
+	var png []byte
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&png, 90)); err != nil {
+		return nil, err
+	}
+	return png, nil
 }
 
 func (s *Service) Snapshot(runtimeSessionID string, input SnapshotInput) (SnapshotOutput, error) {
