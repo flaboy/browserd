@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -11,6 +12,9 @@ type Config struct {
 	CDPBaseURL        string
 	Workdir           string
 	ProfileStore      string
+	LiveBaseURL       string
+	LiveTokenTTL      time.Duration
+	NoVNCBasePath     string
 	S3Endpoint        string
 	S3Region          string
 	S3AccessKeyID     string
@@ -37,6 +41,24 @@ func Load() Config {
 	if profileStore == "" {
 		profileStore = "memory"
 	}
+	liveBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("BROWSERD_LIVE_BASE_URL")), "/")
+	liveTokenTTL := 15 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv("BROWSERD_LIVE_TOKEN_TTL")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			liveTokenTTL = parsed
+		}
+	}
+	noVNCBasePath := strings.TrimSpace(os.Getenv("BROWSERD_NOVNC_BASE_PATH"))
+	if noVNCBasePath == "" {
+		noVNCBasePath = "/v"
+	}
+	if !strings.HasPrefix(noVNCBasePath, "/") {
+		noVNCBasePath = "/" + noVNCBasePath
+	}
+	noVNCBasePath = strings.TrimRight(noVNCBasePath, "/")
+	if noVNCBasePath == "" {
+		noVNCBasePath = "/v"
+	}
 	forcePathStyle := strings.EqualFold(strings.TrimSpace(os.Getenv("BROWSERD_S3_FORCE_PATH_STYLE")), "true") ||
 		strings.TrimSpace(os.Getenv("BROWSERD_S3_FORCE_PATH_STYLE")) == "1"
 	return Config{
@@ -44,6 +66,9 @@ func Load() Config {
 		CDPBaseURL:        strings.TrimRight(cdpBase, "/"),
 		Workdir:           workdir,
 		ProfileStore:      profileStore,
+		LiveBaseURL:       liveBaseURL,
+		LiveTokenTTL:      liveTokenTTL,
+		NoVNCBasePath:     noVNCBasePath,
 		S3Endpoint:        strings.TrimSpace(os.Getenv("BROWSERD_S3_ENDPOINT")),
 		S3Region:          strings.TrimSpace(os.Getenv("BROWSERD_S3_REGION")),
 		S3AccessKeyID:     strings.TrimSpace(os.Getenv("BROWSERD_S3_ACCESS_KEY_ID")),

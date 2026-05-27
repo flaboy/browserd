@@ -9,6 +9,7 @@ import (
 	"browserd/internal/browser"
 	"browserd/internal/config"
 	"browserd/internal/controller"
+	"browserd/internal/live"
 	"browserd/internal/profile"
 	"browserd/internal/runtime"
 	"browserd/internal/session"
@@ -54,15 +55,60 @@ func New(cfg config.Config) http.Handler {
 		assetStore = assetS3Store
 	}
 	browserSvc := browser.NewService(manager, runtime.NewState(), assetStore)
-	handler := controller.NewSessionController(manager, browserSvc, cfg.CDPBaseURL)
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:       manager,
+		Browser:       browserSvc,
+		CDPBaseURL:    cfg.CDPBaseURL,
+		LiveBaseURL:   cfg.LiveBaseURL,
+		NoVNCBasePath: cfg.NoVNCBasePath,
+		LiveTokenTTL:  cfg.LiveTokenTTL,
+		TokenStore:    live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	noVNCBasePath := strings.TrimRight(strings.TrimSpace(cfg.NoVNCBasePath), "/")
+	if noVNCBasePath == "" {
+		noVNCBasePath = "/v"
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
 			types.WriteOK(w, http.StatusOK, map[string]any{"ok": true})
 			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, noVNCBasePath+"/"):
+			token := strings.TrimPrefix(r.URL.Path, noVNCBasePath+"/")
+			token = strings.Trim(token, "/")
+			if token == "" {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "missing live view token")
+				return
+			}
+			handler.ServeLiveView(w, r, token)
+			return
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/sessions":
 			handler.CreateSession(w, r)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/live-view"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/live-view"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.LiveView(w, r, id)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/handoff/start"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/handoff/start"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.StartHandoff(w, r, id)
+			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.Contains(r.URL.Path, "/handoff/") && strings.HasSuffix(r.URL.Path, "/complete"):
+			id, handoffID, ok := extractHandoffCompletePath(r.URL.Path)
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid handoff path")
+				return
+			}
+			handler.CompleteHandoff(w, r, id, handoffID)
 			return
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/commit"):
 			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/commit"))
@@ -117,4 +163,17 @@ func New(cfg config.Config) http.Handler {
 			return
 		}
 	})
+}
+
+func extractHandoffCompletePath(path string) (string, string, bool) {
+	if !strings.HasPrefix(path, "/v1/sessions/") || !strings.HasSuffix(path, "/complete") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(path, "/v1/sessions/")
+	rest = strings.TrimSuffix(rest, "/complete")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 3 || parts[1] != "handoff" || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[2], true
 }

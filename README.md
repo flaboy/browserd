@@ -1,6 +1,6 @@
 # browserd
 
-独立浏览器执行服务（与 `botworks` 解耦），提供 `use_browser` / `browser_use` 运行时所需的最小 HTTP 接口。
+独立浏览器执行服务（与业务系统解耦），提供 `use_browser` / `browser_use` 运行时所需的最小 HTTP 接口。
 
 ## 当前能力（V1）
 - `POST /v1/sessions`

@@ -1,21 +1,34 @@
 package controller
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"browserd/internal/browser"
+	"browserd/internal/live"
 	"browserd/internal/runtime"
 	"browserd/internal/session"
 	"browserd/internal/types"
 )
 
 type SessionController struct {
-	manager    session.Manager
-	browser    browserRuntime
-	cdpBaseURL string
+	manager       session.Manager
+	browser       browserRuntime
+	cdpBaseURL    string
+	liveBaseURL   string
+	noVNCBasePath string
+	liveTokenTTL  time.Duration
+	tokenStore    *live.TokenStore
+	handoffsMu    sync.Mutex
+	handoffs      map[string]handoffState
 }
 
 type browserRuntime interface {
@@ -27,8 +40,54 @@ type browserRuntime interface {
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
 }
 
+type SessionControllerOptions struct {
+	Manager       session.Manager
+	Browser       browserRuntime
+	CDPBaseURL    string
+	LiveBaseURL   string
+	NoVNCBasePath string
+	LiveTokenTTL  time.Duration
+	TokenStore    *live.TokenStore
+}
+
 func NewSessionController(manager session.Manager, browserSvc browserRuntime, cdpBaseURL string) *SessionController {
-	return &SessionController{manager: manager, browser: browserSvc, cdpBaseURL: cdpBaseURL}
+	return NewSessionControllerWithLive(SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserSvc,
+		CDPBaseURL: cdpBaseURL,
+	})
+}
+
+func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionController {
+	ttl := opts.LiveTokenTTL
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	noVNCBasePath := strings.TrimSpace(opts.NoVNCBasePath)
+	if noVNCBasePath == "" {
+		noVNCBasePath = "/v"
+	}
+	if !strings.HasPrefix(noVNCBasePath, "/") {
+		noVNCBasePath = "/" + noVNCBasePath
+	}
+	noVNCBasePath = strings.TrimRight(noVNCBasePath, "/")
+	if noVNCBasePath == "" {
+		noVNCBasePath = "/v"
+	}
+	tokenStore := opts.TokenStore
+	if tokenStore == nil {
+		tokenStore = live.NewTokenStore(live.TokenStoreOptions{})
+	}
+	return &SessionController{
+		manager:       opts.Manager,
+		browser:       opts.Browser,
+		cdpBaseURL:    opts.CDPBaseURL,
+		liveBaseURL:   strings.TrimRight(strings.TrimSpace(opts.LiveBaseURL), "/"),
+		noVNCBasePath: noVNCBasePath,
+		liveTokenTTL:  ttl,
+		tokenStore:    tokenStore,
+		handoffs:      map[string]handoffState{},
+	}
 }
 
 type createSessionRequest struct {
@@ -64,6 +123,23 @@ type screenshotRequest struct {
 	FullPage bool   `json:"fullPage,omitempty"`
 	Format   string `json:"format,omitempty"`
 	Quality  int    `json:"quality,omitempty"`
+}
+
+type liveViewRequest struct {
+	Permission string `json:"permission,omitempty"`
+	TTLSeconds int    `json:"ttlSeconds,omitempty"`
+}
+
+type liveViewOutput struct {
+	HandoffID  string          `json:"handoffId"`
+	ViewerURL  string          `json:"viewerUrl"`
+	ExpiresAt  time.Time       `json:"expiresAt"`
+	Permission live.Permission `json:"permission"`
+}
+
+type handoffState struct {
+	HandoffID string
+	Token     string
 }
 
 func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +178,7 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 	if h.browser != nil {
 		_ = h.browser.Close(runtimeSessionID)
 	}
+	h.revokeRuntimeSession(runtimeSessionID)
 	out, err := h.manager.Commit(runtimeSessionID, session.CommitInput{
 		IfMatchVersion: req.IfMatchVersion,
 	})
@@ -125,6 +202,7 @@ func (h *SessionController) DeleteSession(w http.ResponseWriter, _ *http.Request
 	if h.browser != nil {
 		_ = h.browser.Close(runtimeSessionID)
 	}
+	h.revokeRuntimeSession(runtimeSessionID)
 	err := h.manager.Delete(runtimeSessionID)
 	if err != nil {
 		if err == session.ErrSessionNotFound {
@@ -140,6 +218,10 @@ func (h *SessionController) DeleteSession(w http.ResponseWriter, _ *http.Request
 func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	var req navigateRequest
@@ -180,6 +262,10 @@ func (h *SessionController) Snapshot(w http.ResponseWriter, r *http.Request, run
 func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	var req actRequest
@@ -226,6 +312,81 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 	types.WriteOK(w, http.StatusOK, out)
 }
 
+func (h *SessionController) LiveView(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	req, ok := h.decodeLiveViewRequest(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.issueViewer(runtimeSessionID, "", req, live.PermissionView)
+	if err != nil {
+		h.writeLiveErr(w, err)
+		return
+	}
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) StartHandoff(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	req, ok := h.decodeLiveViewRequest(w, r)
+	if !ok {
+		return
+	}
+
+	h.handoffsMu.Lock()
+	if _, exists := h.handoffs[runtimeSessionID]; exists {
+		h.handoffsMu.Unlock()
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session already has an active handoff")
+		return
+	}
+	h.handoffsMu.Unlock()
+
+	handoffID, err := newOpaqueID("ho")
+	if err != nil {
+		types.WriteErr(w, http.StatusInternalServerError, "TOKEN_GENERATION_FAILED", err.Error())
+		return
+	}
+	out, err := h.issueViewer(runtimeSessionID, handoffID, req, live.PermissionControl)
+	if err != nil {
+		h.writeLiveErr(w, err)
+		return
+	}
+
+	token := tokenFromViewerURL(out.ViewerURL, h.liveBaseURL, h.noVNCBasePath)
+	h.handoffsMu.Lock()
+	h.handoffs[runtimeSessionID] = handoffState{
+		HandoffID: out.HandoffID,
+		Token:     token,
+	}
+	h.handoffsMu.Unlock()
+
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) CompleteHandoff(w http.ResponseWriter, _ *http.Request, runtimeSessionID string, handoffID string) {
+	h.handoffsMu.Lock()
+	state, exists := h.handoffs[runtimeSessionID]
+	if !exists || state.HandoffID != strings.TrimSpace(handoffID) {
+		h.handoffsMu.Unlock()
+		types.WriteErr(w, http.StatusNotFound, "HANDOFF_NOT_FOUND", "handoff not found")
+		return
+	}
+	delete(h.handoffs, runtimeSessionID)
+	h.handoffsMu.Unlock()
+
+	h.tokenStore.Revoke(state.Token)
+	types.WriteOK(w, http.StatusOK, map[string]any{"completed": true})
+}
+
+func (h *SessionController) ServeLiveView(w http.ResponseWriter, _ *http.Request, token string) {
+	state, ok := h.tokenStore.Lookup(token)
+	if !ok {
+		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, "<!doctype html><title>browserd live view</title><body data-runtime-session-id=%q data-permission=%q>browserd live view</body>", html.EscapeString(state.RuntimeSessionID), html.EscapeString(string(state.Permission)))
+}
+
 func writeBrowserErr(w http.ResponseWriter, err error) {
 	switch err {
 	case nil:
@@ -253,6 +414,106 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 	default:
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	}
+}
+
+func (h *SessionController) decodeLiveViewRequest(w http.ResponseWriter, r *http.Request) (liveViewRequest, bool) {
+	var req liveViewRequest
+	if r.Body == nil {
+		return req, true
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return liveViewRequest{}, false
+	}
+	return req, true
+}
+
+func (h *SessionController) issueViewer(runtimeSessionID string, handoffID string, req liveViewRequest, defaultPermission live.Permission) (liveViewOutput, error) {
+	if strings.TrimSpace(h.liveBaseURL) == "" {
+		return liveViewOutput{}, errLiveBaseURLMissing
+	}
+	if _, err := h.manager.Get(runtimeSessionID); err != nil {
+		return liveViewOutput{}, err
+	}
+	permission := defaultPermission
+	if strings.TrimSpace(req.Permission) != "" {
+		permission = live.Permission(strings.TrimSpace(req.Permission))
+	}
+	ttl := h.liveTokenTTL
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+	if strings.TrimSpace(handoffID) == "" {
+		var err error
+		handoffID, err = newOpaqueID("lv")
+		if err != nil {
+			return liveViewOutput{}, err
+		}
+	}
+	token, state, err := h.tokenStore.Issue(live.IssueRequest{
+		RuntimeSessionID: runtimeSessionID,
+		HandoffID:        handoffID,
+		Permission:       permission,
+		TTL:              ttl,
+	})
+	if err != nil {
+		return liveViewOutput{}, err
+	}
+	return liveViewOutput{
+		HandoffID:  handoffID,
+		ViewerURL:  h.viewerURL(token),
+		ExpiresAt:  state.ExpiresAt,
+		Permission: permission,
+	}, nil
+}
+
+var errLiveBaseURLMissing = errors.New("live base url is not configured")
+
+func (h *SessionController) writeLiveErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, session.ErrSessionNotFound):
+		types.WriteErr(w, http.StatusNotFound, "SESSION_NOT_FOUND", err.Error())
+	case errors.Is(err, live.ErrInvalidTokenRequest):
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	case errors.Is(err, errLiveBaseURLMissing):
+		types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_VIEW_NOT_CONFIGURED", err.Error())
+	default:
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	}
+}
+
+func (h *SessionController) viewerURL(token string) string {
+	return h.liveBaseURL + h.noVNCBasePath + "/" + token + "/"
+}
+
+func (h *SessionController) hasActiveHandoff(runtimeSessionID string) bool {
+	h.handoffsMu.Lock()
+	defer h.handoffsMu.Unlock()
+	_, ok := h.handoffs[runtimeSessionID]
+	return ok
+}
+
+func (h *SessionController) revokeRuntimeSession(runtimeSessionID string) {
+	h.handoffsMu.Lock()
+	if state, ok := h.handoffs[runtimeSessionID]; ok {
+		h.tokenStore.Revoke(state.Token)
+		delete(h.handoffs, runtimeSessionID)
+	}
+	h.handoffsMu.Unlock()
+	h.tokenStore.RevokeSession(runtimeSessionID)
+}
+
+func newOpaqueID(prefix string) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+func tokenFromViewerURL(viewerURL string, liveBaseURL string, basePath string) string {
+	token := strings.TrimPrefix(viewerURL, strings.TrimRight(liveBaseURL, "/")+strings.TrimRight(basePath, "/")+"/")
+	return strings.Trim(token, "/")
 }
 
 func ExtractRuntimeSessionID(path string) (string, bool) {

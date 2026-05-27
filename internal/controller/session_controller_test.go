@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"browserd/internal/browser"
 	"browserd/internal/config"
 	"browserd/internal/controller"
+	"browserd/internal/live"
 	"browserd/internal/profile"
 	"browserd/internal/router"
 	"browserd/internal/session"
@@ -364,4 +366,158 @@ func TestSnapshotRoute_UsesPageAsSingleStructure(t *testing.T) {
 	if _, ok := data["text"]; ok {
 		t.Fatalf("expected text field to be removed: %+v", data)
 	}
+}
+
+func TestHandoffStart_ReturnsControlViewerURL(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:      manager,
+		Browser:      &fakeBrowserRuntime{},
+		CDPBaseURL:   "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:  "https://browser.example",
+		LiveTokenTTL: 15 * time.Minute,
+		TokenStore:   live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/start", bytes.NewReader([]byte(`{
+		"permission":"control",
+		"ttlSeconds":900
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.StartHandoff(rr, req, rid)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	data := decodeData(t, rr)
+	if !strings.HasPrefix(data["handoffId"].(string), "ho_") {
+		t.Fatalf("expected handoff id, got %+v", data)
+	}
+	if !strings.HasPrefix(data["viewerUrl"].(string), "https://browser.example/v/") {
+		t.Fatalf("unexpected viewerUrl: %+v", data)
+	}
+	if data["permission"] != "control" {
+		t.Fatalf("unexpected permission: %+v", data)
+	}
+	if data["expiresAt"] == "" {
+		t.Fatalf("expected expiresAt: %+v", data)
+	}
+}
+
+func TestLiveView_ReturnsViewOnlyViewerURL(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:      manager,
+		Browser:      &fakeBrowserRuntime{},
+		CDPBaseURL:   "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:  "https://browser.example/",
+		LiveTokenTTL: 15 * time.Minute,
+		TokenStore:   live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/live-view", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.LiveView(rr, req, rid)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	data := decodeData(t, rr)
+	if data["permission"] != "view" {
+		t.Fatalf("unexpected permission: %+v", data)
+	}
+	if !strings.HasPrefix(data["viewerUrl"].(string), "https://browser.example/v/") {
+		t.Fatalf("unexpected viewerUrl: %+v", data)
+	}
+}
+
+func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:      manager,
+		Browser:      &fakeBrowserRuntime{},
+		CDPBaseURL:   "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:  "https://browser.example",
+		LiveTokenTTL: 15 * time.Minute,
+		TokenStore:   live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+
+	startReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/start", bytes.NewReader([]byte(`{"permission":"control"}`)))
+	startRR := httptest.NewRecorder()
+	handler.StartHandoff(startRR, startReq, rid)
+	if startRR.Code != http.StatusOK {
+		t.Fatalf("expected start 200, got %d body=%s", startRR.Code, startRR.Body.String())
+	}
+	startData := decodeData(t, startRR)
+	handoffID := startData["handoffId"].(string)
+	token := strings.TrimPrefix(startData["viewerUrl"].(string), "https://browser.example/v/")
+	token = strings.Trim(token, "/")
+
+	liveReq := httptest.NewRequest(http.MethodGet, "/v/"+token+"/", nil)
+	liveRR := httptest.NewRecorder()
+	handler.ServeLiveView(liveRR, liveReq, token)
+	if liveRR.Code != http.StatusOK {
+		t.Fatalf("expected live token before complete, got %d body=%s", liveRR.Code, liveRR.Body.String())
+	}
+
+	completeReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/"+handoffID+"/complete", nil)
+	completeRR := httptest.NewRecorder()
+	handler.CompleteHandoff(completeRR, completeReq, rid, handoffID)
+	if completeRR.Code != http.StatusOK {
+		t.Fatalf("expected complete 200, got %d body=%s", completeRR.Code, completeRR.Body.String())
+	}
+
+	revokedRR := httptest.NewRecorder()
+	handler.ServeLiveView(revokedRR, liveReq, token)
+	if revokedRR.Code != http.StatusGone {
+		t.Fatalf("expected revoked token to return 410, got %d body=%s", revokedRR.Code, revokedRR.Body.String())
+	}
+}
+
+func createTestSession(t *testing.T, handler *controller.SessionController) string {
+	t.Helper()
+
+	body := []byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/opaque/profile.tgz"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateSession(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	data := decodeData(t, rr)
+	return data["runtimeSessionId"].(string)
+}
+
+func decodeData(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data: %+v", body)
+	}
+	return data
 }
