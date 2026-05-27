@@ -34,6 +34,15 @@ type fakeBrowserRuntime struct {
 	screenshotErr error
 }
 
+type fakeLiveProxyBrowserRuntime struct {
+	fakeBrowserRuntime
+	target string
+}
+
+func (f *fakeLiveProxyBrowserRuntime) LiveProxyTarget(_ string) (string, error) {
+	return f.target, nil
+}
+
 func (f *fakeBrowserRuntime) PrepareSession(runtimeSessionID string) error {
 	f.prepareCalls = append(f.prepareCalls, runtimeSessionID)
 	return f.prepareErr
@@ -488,6 +497,224 @@ func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
 	if revokedRR.Code != http.StatusGone {
 		t.Fatalf("expected revoked token to return 410, got %d body=%s", revokedRR.Code, revokedRR.Body.String())
 	}
+}
+
+func TestHandoffControlDisconnectAutoCompletesAfterGrace(t *testing.T) {
+	proxy, release := newBlockingLiveProxy(t)
+	defer proxy.Close()
+
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeLiveProxyBrowserRuntime{
+		target: proxy.URL,
+		fakeBrowserRuntime: fakeBrowserRuntime{
+			navigateOut: browser.NavigateOutput{URL: "https://example.com/", Title: "Example"},
+		},
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:                manager,
+		Browser:                browserRuntime,
+		CDPBaseURL:             "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:            "https://browser.example",
+		LiveTokenTTL:           15 * time.Minute,
+		HandoffDisconnectGrace: 25 * time.Millisecond,
+		TokenStore:             live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+	token := startControlHandoff(t, handler, rid)
+
+	done := serveLiveWebsockify(t, handler, token)
+	release()
+	<-done
+
+	assertNavigateStatus(t, handler, rid, http.StatusConflict)
+	eventually(t, 500*time.Millisecond, func() bool {
+		return navigateStatus(handler, rid) == http.StatusOK
+	})
+
+	revokedRR := httptest.NewRecorder()
+	handler.ServeLiveView(revokedRR, httptest.NewRequest(http.MethodGet, "/v/"+token+"/", nil), token)
+	if revokedRR.Code != http.StatusGone {
+		t.Fatalf("expected auto-completed token to return 410, got %d body=%s", revokedRR.Code, revokedRR.Body.String())
+	}
+}
+
+func TestHandoffControlReconnectCancelsAutoComplete(t *testing.T) {
+	proxy, releaseFirst := newBlockingLiveProxy(t)
+	defer proxy.Close()
+
+	handler, rid := newLiveHandoffTestController(t, proxy.URL, 50*time.Millisecond)
+	token := startControlHandoff(t, handler, rid)
+
+	firstDone := serveLiveWebsockify(t, handler, token)
+	releaseFirst()
+	<-firstDone
+
+	_, releaseSecond := replaceBlockingLiveProxyHandler(t, proxy)
+	secondDone := serveLiveWebsockify(t, handler, token)
+	time.Sleep(80 * time.Millisecond)
+	assertNavigateStatus(t, handler, rid, http.StatusConflict)
+
+	releaseSecond()
+	<-secondDone
+	eventually(t, 500*time.Millisecond, func() bool {
+		return navigateStatus(handler, rid) == http.StatusOK
+	})
+}
+
+func TestHandoffExplicitCompleteCancelsDisconnectTimer(t *testing.T) {
+	proxy, release := newBlockingLiveProxy(t)
+	defer proxy.Close()
+
+	handler, rid := newLiveHandoffTestController(t, proxy.URL, 50*time.Millisecond)
+	startReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/start", bytes.NewReader([]byte(`{"permission":"control"}`)))
+	startRR := httptest.NewRecorder()
+	handler.StartHandoff(startRR, startReq, rid)
+	if startRR.Code != http.StatusOK {
+		t.Fatalf("expected start 200, got %d body=%s", startRR.Code, startRR.Body.String())
+	}
+	startData := decodeData(t, startRR)
+	token := liveTokenFromTestViewerURL(t, startData["viewerUrl"].(string))
+	handoffID := startData["handoffId"].(string)
+
+	done := serveLiveWebsockify(t, handler, token)
+	release()
+	<-done
+
+	completeReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/"+handoffID+"/complete", nil)
+	completeRR := httptest.NewRecorder()
+	handler.CompleteHandoff(completeRR, completeReq, rid, handoffID)
+	if completeRR.Code != http.StatusOK {
+		t.Fatalf("expected complete 200, got %d body=%s", completeRR.Code, completeRR.Body.String())
+	}
+	time.Sleep(80 * time.Millisecond)
+	assertNavigateStatus(t, handler, rid, http.StatusOK)
+}
+
+func TestViewOnlyLiveViewDisconnectDoesNotCompleteActiveHandoff(t *testing.T) {
+	proxy, release := newBlockingLiveProxy(t)
+	defer proxy.Close()
+
+	handler, rid := newLiveHandoffTestController(t, proxy.URL, 25*time.Millisecond)
+	_ = startControlHandoff(t, handler, rid)
+
+	liveReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/live-view", bytes.NewReader([]byte(`{}`)))
+	liveRR := httptest.NewRecorder()
+	handler.LiveView(liveRR, liveReq, rid)
+	if liveRR.Code != http.StatusOK {
+		t.Fatalf("expected live view 200, got %d body=%s", liveRR.Code, liveRR.Body.String())
+	}
+	viewToken := liveTokenFromTestViewerURL(t, decodeData(t, liveRR)["viewerUrl"].(string))
+
+	done := serveLiveWebsockify(t, handler, viewToken)
+	release()
+	<-done
+	time.Sleep(60 * time.Millisecond)
+	assertNavigateStatus(t, handler, rid, http.StatusConflict)
+}
+
+func newLiveHandoffTestController(t *testing.T, target string, grace time.Duration) (*controller.SessionController, string) {
+	t.Helper()
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:                manager,
+		Browser:                &fakeLiveProxyBrowserRuntime{target: target, fakeBrowserRuntime: fakeBrowserRuntime{navigateOut: browser.NavigateOutput{URL: "https://example.com/"}}},
+		CDPBaseURL:             "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:            "https://browser.example",
+		LiveTokenTTL:           15 * time.Minute,
+		HandoffDisconnectGrace: grace,
+		TokenStore:             live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	return handler, createTestSession(t, handler)
+}
+
+func newBlockingLiveProxy(t *testing.T) (*httptest.Server, func()) {
+	t.Helper()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/websockify" {
+			http.NotFound(w, r)
+			return
+		}
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	return server, func() {
+		close(release)
+	}
+}
+
+func replaceBlockingLiveProxyHandler(t *testing.T, server *httptest.Server) (*httptest.Server, func()) {
+	t.Helper()
+	release := make(chan struct{})
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/websockify" {
+			http.NotFound(w, r)
+			return
+		}
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+	return server, func() {
+		close(release)
+	}
+}
+
+func startControlHandoff(t *testing.T, handler *controller.SessionController, rid string) string {
+	t.Helper()
+	startReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/handoff/start", bytes.NewReader([]byte(`{"permission":"control"}`)))
+	startRR := httptest.NewRecorder()
+	handler.StartHandoff(startRR, startReq, rid)
+	if startRR.Code != http.StatusOK {
+		t.Fatalf("expected start 200, got %d body=%s", startRR.Code, startRR.Body.String())
+	}
+	return liveTokenFromTestViewerURL(t, decodeData(t, startRR)["viewerUrl"].(string))
+}
+
+func serveLiveWebsockify(t *testing.T, handler *controller.SessionController, token string) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/websockify", nil)
+		handler.ServeLiveView(rr, req, token)
+	}()
+	return done
+}
+
+func assertNavigateStatus(t *testing.T, handler *controller.SessionController, rid string, want int) {
+	t.Helper()
+	if got := navigateStatus(handler, rid); got != want {
+		t.Fatalf("expected navigate status %d, got %d", want, got)
+	}
+}
+
+func navigateStatus(handler *controller.SessionController, rid string) int {
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/navigate", bytes.NewReader([]byte(`{"url":"https://example.com"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Navigate(rr, req, rid)
+	return rr.Code
+}
+
+func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("condition was not met within %s", timeout)
 }
 
 func liveTokenFromTestViewerURL(t *testing.T, viewerURL string) string {

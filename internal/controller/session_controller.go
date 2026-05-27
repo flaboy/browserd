@@ -28,6 +28,7 @@ type SessionController struct {
 	liveBaseURL   string
 	noVNCBasePath string
 	liveTokenTTL  time.Duration
+	handoffGrace  time.Duration
 	tokenStore    *live.TokenStore
 	handoffsMu    sync.Mutex
 	handoffs      map[string]handoffState
@@ -53,7 +54,10 @@ type SessionControllerOptions struct {
 	LiveBaseURL   string
 	NoVNCBasePath string
 	LiveTokenTTL  time.Duration
-	TokenStore    *live.TokenStore
+	// HandoffDisconnectGrace controls how long a control noVNC disconnect may last
+	// before the handoff is automatically completed.
+	HandoffDisconnectGrace time.Duration
+	TokenStore             *live.TokenStore
 }
 
 func NewSessionController(manager session.Manager, browserSvc browserRuntime, cdpBaseURL string) *SessionController {
@@ -68,6 +72,10 @@ func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionControl
 	ttl := opts.LiveTokenTTL
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
+	}
+	handoffGrace := opts.HandoffDisconnectGrace
+	if handoffGrace <= 0 {
+		handoffGrace = 60 * time.Second
 	}
 	noVNCBasePath := strings.TrimSpace(opts.NoVNCBasePath)
 	if noVNCBasePath == "" {
@@ -91,6 +99,7 @@ func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionControl
 		liveBaseURL:   strings.TrimRight(strings.TrimSpace(opts.LiveBaseURL), "/"),
 		noVNCBasePath: noVNCBasePath,
 		liveTokenTTL:  ttl,
+		handoffGrace:  handoffGrace,
 		tokenStore:    tokenStore,
 		handoffs:      map[string]handoffState{},
 	}
@@ -144,8 +153,10 @@ type liveViewOutput struct {
 }
 
 type handoffState struct {
-	HandoffID string
-	Token     string
+	HandoffID         string
+	Token             string
+	ActiveConnections int
+	DisconnectTimer   *time.Timer
 }
 
 func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -368,17 +379,10 @@ func (h *SessionController) StartHandoff(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *SessionController) CompleteHandoff(w http.ResponseWriter, _ *http.Request, runtimeSessionID string, handoffID string) {
-	h.handoffsMu.Lock()
-	state, exists := h.handoffs[runtimeSessionID]
-	if !exists || state.HandoffID != strings.TrimSpace(handoffID) {
-		h.handoffsMu.Unlock()
+	if ok := h.completeHandoff(runtimeSessionID, handoffID); !ok {
 		types.WriteErr(w, http.StatusNotFound, "HANDOFF_NOT_FOUND", "handoff not found")
 		return
 	}
-	delete(h.handoffs, runtimeSessionID)
-	h.handoffsMu.Unlock()
-
-	h.tokenStore.Revoke(state.Token)
 	types.WriteOK(w, http.StatusOK, map[string]any{"completed": true})
 }
 
@@ -391,7 +395,7 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 	if liveRuntime, ok := h.browser.(browserLiveProxyRuntime); ok {
 		target, err := liveRuntime.LiveProxyTarget(state.RuntimeSessionID)
 		if err == nil && strings.TrimSpace(target) != "" {
-			if h.proxyLiveView(w, r, target, token) {
+			if h.proxyLiveView(w, r, target, token, state) {
 				return
 			}
 		}
@@ -401,10 +405,15 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 	_, _ = fmt.Fprintf(w, "<!doctype html><title>browserd live view</title><body data-runtime-session-id=%q data-permission=%q>browserd live view</body>", html.EscapeString(state.RuntimeSessionID), html.EscapeString(string(state.Permission)))
 }
 
-func (h *SessionController) proxyLiveView(w http.ResponseWriter, r *http.Request, target string, token string) bool {
+func (h *SessionController) proxyLiveView(w http.ResponseWriter, r *http.Request, target string, token string, state live.TokenState) bool {
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		return false
+	}
+	tracked := h.shouldTrackHandoffConnection(r, token, state)
+	if tracked {
+		h.beginHandoffConnection(state.RuntimeSessionID, state.HandoffID)
+		defer h.endHandoffConnection(state.RuntimeSessionID, state.HandoffID)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	originalDirector := proxy.Director
@@ -416,6 +425,49 @@ func (h *SessionController) proxyLiveView(w http.ResponseWriter, r *http.Request
 	}
 	proxy.ServeHTTP(w, r)
 	return true
+}
+
+func (h *SessionController) shouldTrackHandoffConnection(r *http.Request, token string, state live.TokenState) bool {
+	if state.Permission != live.PermissionControl {
+		return false
+	}
+	path := strings.TrimRight(h.noVNCBasePath, "/") + "/" + token + "/websockify"
+	return r.URL.Path == path
+}
+
+func (h *SessionController) beginHandoffConnection(runtimeSessionID string, handoffID string) {
+	h.handoffsMu.Lock()
+	defer h.handoffsMu.Unlock()
+
+	state, ok := h.handoffs[runtimeSessionID]
+	if !ok || state.HandoffID != handoffID {
+		return
+	}
+	if state.DisconnectTimer != nil {
+		state.DisconnectTimer.Stop()
+		state.DisconnectTimer = nil
+	}
+	state.ActiveConnections++
+	h.handoffs[runtimeSessionID] = state
+}
+
+func (h *SessionController) endHandoffConnection(runtimeSessionID string, handoffID string) {
+	h.handoffsMu.Lock()
+	defer h.handoffsMu.Unlock()
+
+	state, ok := h.handoffs[runtimeSessionID]
+	if !ok || state.HandoffID != handoffID {
+		return
+	}
+	if state.ActiveConnections > 0 {
+		state.ActiveConnections--
+	}
+	if state.ActiveConnections == 0 {
+		state.DisconnectTimer = time.AfterFunc(h.handoffGrace, func() {
+			h.completeHandoff(runtimeSessionID, handoffID)
+		})
+	}
+	h.handoffs[runtimeSessionID] = state
 }
 
 func (h *SessionController) liveProxyPath(path string, token string) string {
@@ -541,11 +593,31 @@ func (h *SessionController) hasActiveHandoff(runtimeSessionID string) bool {
 func (h *SessionController) revokeRuntimeSession(runtimeSessionID string) {
 	h.handoffsMu.Lock()
 	if state, ok := h.handoffs[runtimeSessionID]; ok {
+		if state.DisconnectTimer != nil {
+			state.DisconnectTimer.Stop()
+		}
 		h.tokenStore.Revoke(state.Token)
 		delete(h.handoffs, runtimeSessionID)
 	}
 	h.handoffsMu.Unlock()
 	h.tokenStore.RevokeSession(runtimeSessionID)
+}
+
+func (h *SessionController) completeHandoff(runtimeSessionID string, handoffID string) bool {
+	h.handoffsMu.Lock()
+	state, exists := h.handoffs[runtimeSessionID]
+	if !exists || state.HandoffID != strings.TrimSpace(handoffID) {
+		h.handoffsMu.Unlock()
+		return false
+	}
+	if state.DisconnectTimer != nil {
+		state.DisconnectTimer.Stop()
+	}
+	delete(h.handoffs, runtimeSessionID)
+	h.handoffsMu.Unlock()
+
+	h.tokenStore.Revoke(state.Token)
+	return true
 }
 
 func newOpaqueID(prefix string) (string, error) {
