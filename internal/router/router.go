@@ -75,8 +75,7 @@ func New(cfg config.Config) http.Handler {
 			types.WriteOK(w, http.StatusOK, map[string]any{"ok": true})
 			return
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, noVNCBasePath+"/"):
-			token := strings.TrimPrefix(r.URL.Path, noVNCBasePath+"/")
-			token = strings.Trim(token, "/")
+			token := extractLiveViewToken(r.URL.Path, noVNCBasePath)
 			if token == "" {
 				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "missing live view token")
 				return
@@ -163,6 +162,17 @@ func New(cfg config.Config) http.Handler {
 			return
 		}
 	})
+}
+
+func extractLiveViewToken(path string, basePath string) string {
+	basePath = strings.TrimRight(strings.TrimSpace(basePath), "/")
+	if basePath == "" {
+		basePath = "/v"
+	}
+	rest := strings.TrimPrefix(path, basePath+"/")
+	rest = strings.TrimLeft(rest, "/")
+	token, _, _ := strings.Cut(rest, "/")
+	return strings.TrimSpace(token)
 }
 
 func extractHandoffCompletePath(path string) (string, string, bool) {

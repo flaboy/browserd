@@ -467,8 +467,7 @@ func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
 	}
 	startData := decodeData(t, startRR)
 	handoffID := startData["handoffId"].(string)
-	token := strings.TrimPrefix(startData["viewerUrl"].(string), "https://browser.example/v/")
-	token = strings.Trim(token, "/")
+	token := liveTokenFromTestViewerURL(t, startData["viewerUrl"].(string))
 
 	liveReq := httptest.NewRequest(http.MethodGet, "/v/"+token+"/", nil)
 	liveRR := httptest.NewRecorder()
@@ -489,6 +488,16 @@ func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
 	if revokedRR.Code != http.StatusGone {
 		t.Fatalf("expected revoked token to return 410, got %d body=%s", revokedRR.Code, revokedRR.Body.String())
 	}
+}
+
+func liveTokenFromTestViewerURL(t *testing.T, viewerURL string) string {
+	t.Helper()
+	withoutBase := strings.TrimPrefix(viewerURL, "https://browser.example/v/")
+	token, _, _ := strings.Cut(withoutBase, "/")
+	if token == "" {
+		t.Fatalf("expected viewer token in %q", viewerURL)
+	}
+	return token
 }
 
 func createTestSession(t *testing.T, handler *controller.SessionController) string {

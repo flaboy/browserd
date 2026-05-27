@@ -526,7 +526,9 @@ func (h *SessionController) writeLiveErr(w http.ResponseWriter, err error) {
 }
 
 func (h *SessionController) viewerURL(token string) string {
-	return h.liveBaseURL + h.noVNCBasePath + "/" + token + "/"
+	base := h.liveBaseURL + h.noVNCBasePath + "/" + token
+	path := strings.TrimLeft(h.noVNCBasePath+"/"+token+"/websockify", "/")
+	return base + "/vnc.html?autoconnect=true&resize=remote&path=" + url.QueryEscape(path)
 }
 
 func (h *SessionController) hasActiveHandoff(runtimeSessionID string) bool {
@@ -555,8 +557,17 @@ func newOpaqueID(prefix string) (string, error) {
 }
 
 func tokenFromViewerURL(viewerURL string, liveBaseURL string, basePath string) string {
+	parsed, err := url.Parse(viewerURL)
+	if err == nil && parsed.Path != "" {
+		prefix := strings.TrimRight(basePath, "/") + "/"
+		rest := strings.TrimPrefix(parsed.Path, prefix)
+		rest = strings.TrimLeft(rest, "/")
+		token, _, _ := strings.Cut(rest, "/")
+		return strings.TrimSpace(token)
+	}
 	token := strings.TrimPrefix(viewerURL, strings.TrimRight(liveBaseURL, "/")+strings.TrimRight(basePath, "/")+"/")
-	return strings.Trim(token, "/")
+	token, _, _ = strings.Cut(strings.Trim(token, "/"), "/")
+	return strings.TrimSpace(token)
 }
 
 func ExtractRuntimeSessionID(path string) (string, bool) {
