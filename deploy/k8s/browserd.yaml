@@ -28,6 +28,15 @@ spec:
               value: "7011"
             - name: BROWSERD_CDP_BASE_URL
               value: "ws://browserd:9222/devtools/browser"
+            - name: BROWSERD_LIVE_ENABLED
+              value: "true"
+            - name: BROWSERD_LIVE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: octopus-cluster-config
+                  key: browserLiveBaseURL
+            - name: BROWSERD_LIVE_TOKEN_TTL
+              value: "15m"
           resources:
             requests:
               cpu: "100m"

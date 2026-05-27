@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +40,10 @@ type browserRuntime interface {
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
 	Act(runtimeSessionID string, input browser.ActInput) (browser.ActOutput, error)
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
+}
+
+type browserLiveProxyRuntime interface {
+	LiveProxyTarget(runtimeSessionID string) (string, error)
 }
 
 type SessionControllerOptions struct {
@@ -376,15 +382,52 @@ func (h *SessionController) CompleteHandoff(w http.ResponseWriter, _ *http.Reque
 	types.WriteOK(w, http.StatusOK, map[string]any{"completed": true})
 }
 
-func (h *SessionController) ServeLiveView(w http.ResponseWriter, _ *http.Request, token string) {
+func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request, token string) {
 	state, ok := h.tokenStore.Lookup(token)
 	if !ok {
 		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
 		return
 	}
+	if liveRuntime, ok := h.browser.(browserLiveProxyRuntime); ok {
+		target, err := liveRuntime.LiveProxyTarget(state.RuntimeSessionID)
+		if err == nil && strings.TrimSpace(target) != "" {
+			if h.proxyLiveView(w, r, target, token) {
+				return
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, "<!doctype html><title>browserd live view</title><body data-runtime-session-id=%q data-permission=%q>browserd live view</body>", html.EscapeString(state.RuntimeSessionID), html.EscapeString(string(state.Permission)))
+}
+
+func (h *SessionController) proxyLiveView(w http.ResponseWriter, r *http.Request, target string, token string) bool {
+	targetURL, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = h.liveProxyPath(r.URL.Path, token)
+		req.URL.RawPath = ""
+		req.Host = targetURL.Host
+	}
+	proxy.ServeHTTP(w, r)
+	return true
+}
+
+func (h *SessionController) liveProxyPath(path string, token string) string {
+	prefix := strings.TrimRight(h.noVNCBasePath, "/") + "/" + token
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" || rest == "/" {
+		return "/"
+	}
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+	return rest
 }
 
 func writeBrowserErr(w http.ResponseWriter, err error) {

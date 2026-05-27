@@ -11,6 +11,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o /out/
 FROM alpine:3.20
 RUN apk add --no-cache \
     chromium \
+    xvfb \
+    openbox \
+    x11vnc \
+    novnc \
+    websockify \
     nss \
     freetype \
     harfbuzz \

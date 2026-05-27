@@ -28,7 +28,7 @@ func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, content
 }
 
 func TestBuildChromeArgs_IncludesNoSandboxAndProfileDir(t *testing.T) {
-	args := buildChromeArgs("/tmp/profile")
+	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: true})
 
 	hasNoSandbox := false
 	hasUserDataDir := false
@@ -66,9 +66,18 @@ func TestWaitForDevToolsWS_ReturnsWebSocketURLFromActivePortFile(t *testing.T) {
 }
 
 func TestBuildChromeArgs_KeepsAboutBlankBootstrapPage(t *testing.T) {
-	args := buildChromeArgs("/tmp/profile")
+	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: true})
 	if args[len(args)-1] != "about:blank" {
 		t.Fatalf("expected about:blank bootstrap page, got %+v", args)
+	}
+}
+
+func TestBuildChromeArgs_HeadedWhenLiveViewEnabled(t *testing.T) {
+	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: false})
+	for _, arg := range args {
+		if arg == "--headless=new" {
+			t.Fatalf("did not expect headless arg in headed mode: %+v", args)
+		}
 	}
 }
 

@@ -111,6 +111,7 @@ type Service struct {
 
 type activeBrowser struct {
 	cmd         *exec.Cmd
+	live        *LiveRuntime
 	wsURL       string
 	rootCtx     context.Context
 	rootCancel  context.CancelFunc
@@ -164,6 +165,9 @@ func (s *Service) Close(runtimeSessionID string) error {
 		_ = b.cmd.Process.Kill()
 		_, _ = b.cmd.Process.Wait()
 	}
+	if b.live != nil {
+		_ = b.live.Stop(context.Background())
+	}
 	if b.pageCancel != nil {
 		b.pageCancel()
 	}
@@ -174,6 +178,17 @@ func (s *Service) Close(runtimeSessionID string) error {
 		b.rootCancel()
 	}
 	return nil
+}
+
+func (s *Service) LiveProxyTarget(runtimeSessionID string) (string, error) {
+	b, err := s.ensureBrowser(runtimeSessionID)
+	if err != nil {
+		return "", err
+	}
+	if b.live == nil {
+		return "", ErrPlaywrightUnavailable
+	}
+	return b.live.ProxyTarget(), nil
 }
 
 func (s *Service) Navigate(runtimeSessionID string, input NavigateInput) (NavigateOutput, error) {
@@ -529,14 +544,39 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		return nil, ErrPlaywrightUnavailable
 	}
 
-	cmd := exec.Command(chromeBin, buildChromeArgs(info.ProfileDir)...)
+	liveEnabled := liveModeEnabled()
+	var liveRuntime *LiveRuntime
+	var chromeEnv []string
+	if liveEnabled {
+		var err error
+		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir))
+		if err != nil {
+			return nil, err
+		}
+		if err := liveRuntime.Start(context.Background()); err != nil {
+			return nil, err
+		}
+		chromeEnv = liveRuntime.ChromeEnv()
+	}
+
+	cmd := exec.Command(chromeBin, buildChromeArgs(BrowserOptions{
+		UserDataDir: info.ProfileDir,
+		Headless:    !liveEnabled,
+	})...)
+	cmd.Env = append(cmd.Environ(), chromeEnv...)
 	if err := cmd.Start(); err != nil {
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
 		return nil, err
 	}
 
 	wsURL, err := waitForDevToolsWS(info.ProfileDir, 5*time.Second)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
 		return nil, err
 	}
 
@@ -548,12 +588,16 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		allocCancel()
 		rootCancel()
 		_ = cmd.Process.Kill()
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
 		return nil, err
 	}
 
 	s.mu.Lock()
 	ab := &activeBrowser{
 		cmd:         cmd,
+		live:        liveRuntime,
 		wsURL:       wsURL,
 		rootCtx:     rootCtx,
 		rootCancel:  rootCancel,
@@ -728,16 +772,28 @@ func jsStringArray(values []string) string {
 	return "[" + strings.Join(parts, ",") + "]"
 }
 
-func buildChromeArgs(profileDir string) []string {
-	return []string{
-		"--headless=new",
+type BrowserOptions struct {
+	UserDataDir string
+	Headless    bool
+}
+
+func buildChromeArgs(opts BrowserOptions) []string {
+	args := []string{
 		"--disable-gpu",
 		"--no-sandbox",
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-dev-shm-usage",
 		"--remote-debugging-port=0",
-		"--user-data-dir=" + profileDir,
-		"about:blank",
 	}
+	if opts.Headless {
+		args = append(args, "--headless=new")
+	}
+	args = append(args, "--user-data-dir="+opts.UserDataDir, "about:blank")
+	return args
+}
+
+func liveModeEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("BROWSERD_LIVE_ENABLED"))
+	return strings.EqualFold(value, "true") || value == "1"
 }
