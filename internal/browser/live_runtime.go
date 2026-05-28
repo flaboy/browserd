@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -150,7 +149,7 @@ func (r *LiveRuntime) Health(ctx context.Context) error {
 	if err := r.processesHealthy(); err != nil {
 		return err
 	}
-	if err := waitForVNCReady(ctx, r.Plan.VNCPort, 2*time.Second); err != nil {
+	if err := waitForTCPReady(ctx, r.Plan.VNCPort, 2*time.Second); err != nil {
 		return fmt.Errorf("%w: x11vnc port %d is not ready: %v", ErrLiveRuntimeUnhealthy, r.Plan.VNCPort, err)
 	}
 	if err := waitForTCPReady(ctx, r.Plan.WebsockifyPort, 2*time.Second); err != nil {
@@ -191,7 +190,7 @@ func (r *LiveRuntime) waitForCommandReady(ctx context.Context, name string) erro
 	case "Xvfb", "openbox":
 		return r.waitForProcessStable(ctx, name, 100*time.Millisecond)
 	case "x11vnc":
-		if err := waitForVNCReady(ctx, r.Plan.VNCPort, 5*time.Second); err != nil {
+		if err := waitForTCPReady(ctx, r.Plan.VNCPort, 5*time.Second); err != nil {
 			return fmt.Errorf("%w: x11vnc did not become ready on port %d: %v%s", ErrLiveRuntimeUnhealthy, r.Plan.VNCPort, err, r.processDiagnostics())
 		}
 	case "websockify":
@@ -261,35 +260,6 @@ func (p *liveProcess) diagnostics() string {
 		return ""
 	}
 	return " output=" + strconv.Quote(out)
-}
-
-func waitForVNCReady(ctx context.Context, port int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 100*time.Millisecond)
-		if err == nil {
-			deadline := time.Now().Add(200 * time.Millisecond)
-			_ = conn.SetReadDeadline(deadline)
-			buf := make([]byte, 4)
-			_, readErr := io.ReadFull(conn, buf)
-			_ = conn.Close()
-			if readErr == nil && string(buf) == "RFB " {
-				return nil
-			}
-			lastErr = readErr
-		} else {
-			lastErr = err
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if lastErr == nil {
-		lastErr = context.DeadlineExceeded
-	}
-	return lastErr
 }
 
 func waitForTCPReady(ctx context.Context, port int, timeout time.Duration) error {
