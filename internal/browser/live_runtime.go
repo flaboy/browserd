@@ -150,10 +150,10 @@ func (r *LiveRuntime) Health(ctx context.Context) error {
 	if err := r.processesHealthy(); err != nil {
 		return err
 	}
-	if err := waitForVNCReady(ctx, r.Plan.VNCPort, 200*time.Millisecond); err != nil {
+	if err := waitForVNCReady(ctx, r.Plan.VNCPort, 2*time.Second); err != nil {
 		return fmt.Errorf("%w: x11vnc port %d is not ready: %v", ErrLiveRuntimeUnhealthy, r.Plan.VNCPort, err)
 	}
-	if err := waitForTCPReady(ctx, r.Plan.WebsockifyPort, 200*time.Millisecond); err != nil {
+	if err := waitForTCPReady(ctx, r.Plan.WebsockifyPort, 2*time.Second); err != nil {
 		return fmt.Errorf("%w: websockify port %d is not ready: %v", ErrLiveRuntimeUnhealthy, r.Plan.WebsockifyPort, err)
 	}
 	return nil
