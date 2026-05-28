@@ -36,10 +36,14 @@ type fakeBrowserRuntime struct {
 
 type fakeLiveProxyBrowserRuntime struct {
 	fakeBrowserRuntime
-	target string
+	target    string
+	targetErr error
 }
 
 func (f *fakeLiveProxyBrowserRuntime) LiveProxyTarget(_ string) (string, error) {
+	if f.targetErr != nil {
+		return "", f.targetErr
+	}
 	return f.target, nil
 }
 
@@ -496,6 +500,34 @@ func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
 	handler.ServeLiveView(revokedRR, liveReq, token)
 	if revokedRR.Code != http.StatusGone {
 		t.Fatalf("expected revoked token to return 410, got %d body=%s", revokedRR.Code, revokedRR.Body.String())
+	}
+}
+
+func TestServeLiveView_ReturnsUnhealthyWhenLiveProxyTargetFails(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:      manager,
+		Browser:      &fakeLiveProxyBrowserRuntime{targetErr: browser.ErrLiveRuntimeUnhealthy},
+		CDPBaseURL:   "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:  "https://browser.example",
+		LiveTokenTTL: 15 * time.Minute,
+		TokenStore:   live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+	token := startControlHandoff(t, handler, rid)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/vnc.html", nil)
+	handler.ServeLiveView(rr, req, token)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected unhealthy live proxy to return 503, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "LIVE_RUNTIME_UNHEALTHY") {
+		t.Fatalf("expected LIVE_RUNTIME_UNHEALTHY body, got %s", rr.Body.String())
 	}
 }
 

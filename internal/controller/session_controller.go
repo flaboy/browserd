@@ -394,11 +394,19 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 	}
 	if liveRuntime, ok := h.browser.(browserLiveProxyRuntime); ok {
 		target, err := liveRuntime.LiveProxyTarget(state.RuntimeSessionID)
-		if err == nil && strings.TrimSpace(target) != "" {
-			if h.proxyLiveView(w, r, target, token, state) {
-				return
-			}
+		if err != nil {
+			writeBrowserErr(w, err)
+			return
 		}
+		if strings.TrimSpace(target) == "" {
+			types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", "live proxy target is empty")
+			return
+		}
+		if h.proxyLiveView(w, r, target, token, state) {
+			return
+		}
+		types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", "live proxy target is invalid")
+		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -500,6 +508,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, browser.ErrPlaywrightUnavailable):
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", err.Error())
+	case errors.Is(err, browser.ErrLiveRuntimeUnhealthy):
+		types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", err.Error())
 	case errors.Is(err, browser.ErrNavigationFailed):
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):

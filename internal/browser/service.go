@@ -188,6 +188,9 @@ func (s *Service) LiveProxyTarget(runtimeSessionID string) (string, error) {
 	if b.live == nil {
 		return "", ErrPlaywrightUnavailable
 	}
+	if err := b.live.Health(context.Background()); err != nil {
+		return "", err
+	}
 	return b.live.ProxyTarget(), nil
 }
 
