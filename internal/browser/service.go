@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ var (
 	ErrInvalidRequest        = errors.New("invalid request")
 	ErrNavigationFailed      = errors.New("navigation failed")
 	ErrActionFailed          = errors.New("action failed")
+	ErrEvaluateFailed        = errors.New("evaluate failed")
 	ErrScreenshotFailed      = errors.New("screenshot failed")
 	ErrPlaywrightUnavailable = errors.New("playwright not available")
 )
@@ -97,6 +99,19 @@ type ScreenshotOutput struct {
 	ContentType string `json:"contentType"`
 	Base64      string `json:"base64"`
 	ByteLength  int    `json:"byteLength"`
+}
+
+type EvaluateInput struct {
+	Script    string `json:"script"`
+	Args      []any  `json:"args,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
+	World     string `json:"world,omitempty"`
+}
+
+type EvaluateOutput struct {
+	Result any    `json:"result"`
+	URL    string `json:"url"`
+	Title  string `json:"title"`
 }
 
 type Service struct {
@@ -418,6 +433,68 @@ func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (Sc
 		Base64:      base64.StdEncoding.EncodeToString(buf),
 		ByteLength:  len(buf),
 	}, nil
+}
+
+func (s *Service) Evaluate(runtimeSessionID string, input EvaluateInput) (EvaluateOutput, error) {
+	if strings.TrimSpace(input.Script) == "" {
+		return EvaluateOutput{}, ErrInvalidRequest
+	}
+	world := strings.TrimSpace(input.World)
+	if world != "" && world != "MAIN" {
+		return EvaluateOutput{}, fmt.Errorf("%w: browserd evaluate only supports MAIN world; omit world or use MAIN", ErrInvalidRequest)
+	}
+	argsJSON, err := json.Marshal(input.Args)
+	if err != nil {
+		return EvaluateOutput{}, fmt.Errorf("%w: args must be JSON serializable", ErrInvalidRequest)
+	}
+	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, input.TimeoutMs)
+	if err != nil {
+		return EvaluateOutput{}, err
+	}
+	defer cancel()
+
+	var out EvaluateOutput
+	if err := chromedp.Run(ctx, chromedp.Evaluate(browserEvaluateRuntimeScript(input.Script, string(argsJSON)), &out)); err != nil {
+		return EvaluateOutput{}, fmt.Errorf("%w: %v", ErrEvaluateFailed, err)
+	}
+	return out, nil
+}
+
+func browserEvaluateRuntimeScript(script string, argsJSON string) string {
+	return fmt.Sprintf(`(async () => {
+  const args = %s;
+  const raw = await (async () => { %s })();
+  const result = raw === undefined ? null : raw;
+  const guard = findNonJsonValue(result, "$", new Set());
+  if (guard) throw new Error("EVALUATE_RESULT_NOT_JSON: " + guard);
+  return {
+    result: JSON.parse(JSON.stringify(result)),
+    url: document.location.href,
+    title: document.title
+  };
+
+  function findNonJsonValue(value, path, seen) {
+    if (value === null) return null;
+    const valueType = typeof value;
+    if (valueType === "function" || valueType === "symbol" || valueType === "bigint" || valueType === "undefined") return path + " is " + valueType;
+    if (valueType !== "object") return null;
+    if (value instanceof Node) return path + " is DOM Node";
+    if (seen.has(value)) return path + " is circular";
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i += 1) {
+        const nested = findNonJsonValue(value[i], path + "[" + i + "]", seen);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    for (const key of Object.keys(value)) {
+      const nested = findNonJsonValue(value[key], path + "." + key, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+})()`, argsJSON, script)
 }
 
 func (s *Service) newBrowserContext(runtimeSessionID string, timeoutMs int) (context.Context, context.CancelFunc, error) {

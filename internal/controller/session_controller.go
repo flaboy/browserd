@@ -41,6 +41,7 @@ type browserRuntime interface {
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
 	Act(runtimeSessionID string, input browser.ActInput) (browser.ActOutput, error)
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
+	Evaluate(runtimeSessionID string, input browser.EvaluateInput) (browser.EvaluateOutput, error)
 }
 
 type browserLiveProxyRuntime interface {
@@ -138,6 +139,13 @@ type screenshotRequest struct {
 	FullPage bool   `json:"fullPage,omitempty"`
 	Format   string `json:"format,omitempty"`
 	Quality  int    `json:"quality,omitempty"`
+}
+
+type evaluateRequest struct {
+	Script    string `json:"script"`
+	Args      []any  `json:"args,omitempty"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
+	World     string `json:"world,omitempty"`
 }
 
 type liveViewRequest struct {
@@ -321,6 +329,33 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 		FullPage: req.FullPage,
 		Format:   req.Format,
 		Quality:  req.Quality,
+	})
+	if err != nil {
+		writeBrowserErr(w, err)
+		return
+	}
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	if h.browser == nil {
+		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
+		return
+	}
+	var req evaluateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	out, err := h.browser.Evaluate(runtimeSessionID, browser.EvaluateInput{
+		Script:    req.Script,
+		Args:      req.Args,
+		TimeoutMs: req.TimeoutMs,
+		World:     req.World,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)
@@ -514,6 +549,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):
 		types.WriteErr(w, http.StatusBadGateway, "ACTION_FAILED", err.Error())
+	case errors.Is(err, browser.ErrEvaluateFailed):
+		types.WriteErr(w, http.StatusBadGateway, "EVALUATE_FAILED", err.Error())
 	case errors.Is(err, browser.ErrScreenshotFailed):
 		types.WriteErr(w, http.StatusBadGateway, "SCREENSHOT_FAILED", err.Error())
 	default:

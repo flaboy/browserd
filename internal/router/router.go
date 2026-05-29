@@ -149,6 +149,14 @@ func New(cfg config.Config) http.Handler {
 			}
 			handler.Act(w, r, id)
 			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/evaluate"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/evaluate"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.Evaluate(w, r, id)
+			return
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/screenshot"):
 			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/screenshot"))
 			if !ok {

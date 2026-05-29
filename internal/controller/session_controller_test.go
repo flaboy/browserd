@@ -32,6 +32,9 @@ type fakeBrowserRuntime struct {
 	actErr        error
 	screenshotOut browser.ScreenshotOutput
 	screenshotErr error
+	evaluateCalls []browser.EvaluateInput
+	evaluateOut   browser.EvaluateOutput
+	evaluateErr   error
 }
 
 type fakeLiveProxyBrowserRuntime struct {
@@ -72,6 +75,11 @@ func (f *fakeBrowserRuntime) Act(_ string, _ browser.ActInput) (browser.ActOutpu
 
 func (f *fakeBrowserRuntime) Screenshot(_ string, _ browser.ScreenshotInput) (browser.ScreenshotOutput, error) {
 	return f.screenshotOut, f.screenshotErr
+}
+
+func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (browser.EvaluateOutput, error) {
+	f.evaluateCalls = append(f.evaluateCalls, input)
+	return f.evaluateOut, f.evaluateErr
 }
 
 type fakeSessionManager struct {
@@ -453,6 +461,51 @@ func TestLiveView_ReturnsViewOnlyViewerURL(t *testing.T) {
 	}
 	if !strings.HasPrefix(data["viewerUrl"].(string), "https://browser.example/v/") {
 		t.Fatalf("unexpected viewerUrl: %+v", data)
+	}
+}
+
+func TestEvaluate_ReturnsJSONResult(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		evaluateOut: browser.EvaluateOutput{
+			Result: map[string]any{"title": "Example"},
+			URL:    "https://example.com/",
+			Title:  "Example",
+		},
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/evaluate", bytes.NewReader([]byte(`{
+		"script":"return { title: document.title }",
+		"args":["ok"],
+		"timeoutMs":1000
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Evaluate(rr, req, rid)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	data := decodeData(t, rr)
+	result := data["result"].(map[string]any)
+	if result["title"] != "Example" {
+		t.Fatalf("unexpected result: %+v", data)
+	}
+	if len(browserRuntime.evaluateCalls) != 1 {
+		t.Fatalf("expected one evaluate call, got %d", len(browserRuntime.evaluateCalls))
+	}
+	if browserRuntime.evaluateCalls[0].Script != "return { title: document.title }" {
+		t.Fatalf("unexpected script: %+v", browserRuntime.evaluateCalls[0])
 	}
 }
 
