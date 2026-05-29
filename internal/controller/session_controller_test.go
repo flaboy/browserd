@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -508,6 +509,43 @@ func TestEvaluate_ReturnsJSONResult(t *testing.T) {
 	}
 	if browserRuntime.evaluateCalls[0].Script != "return { title: document.title }" {
 		t.Fatalf("unexpected script: %+v", browserRuntime.evaluateCalls[0])
+	}
+}
+
+func TestEvaluate_MapsNonJSONResultErrorCode(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		evaluateErr: fmt.Errorf("%w: exception \"Uncaught Error: EVALUATE_RESULT_NOT_JSON: $ is DOM Node\"", browser.ErrEvaluateFailed),
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/evaluate", bytes.NewReader([]byte(`{"script":"return document.body"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Evaluate(rr, req, rid)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	errBody := body["error"].(map[string]any)
+	if errBody["code"] != "EVALUATE_RESULT_NOT_JSON" {
+		t.Fatalf("unexpected error: %+v", body)
+	}
+	if !strings.Contains(errBody["message"].(string), "return a JSON-serializable value") {
+		t.Fatalf("missing hint: %+v", body)
 	}
 }
 

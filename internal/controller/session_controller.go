@@ -562,6 +562,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):
 		types.WriteErr(w, http.StatusBadGateway, "ACTION_FAILED", err.Error())
+	case strings.Contains(err.Error(), "EVALUATE_RESULT_NOT_JSON:"):
+		types.WriteErr(w, http.StatusBadRequest, "EVALUATE_RESULT_NOT_JSON", normalizeEvaluateResultNotJSONMessage(err.Error()))
 	case errors.Is(err, browser.ErrEvaluateFailed):
 		types.WriteErr(w, http.StatusBadGateway, "EVALUATE_FAILED", err.Error())
 	case errors.Is(err, browser.ErrScreenshotFailed):
@@ -569,6 +571,19 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 	default:
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	}
+}
+
+func normalizeEvaluateResultNotJSONMessage(message string) string {
+	const marker = "EVALUATE_RESULT_NOT_JSON:"
+	idx := strings.Index(message, marker)
+	if idx < 0 {
+		return "evaluate result is not JSON serializable; return a JSON-serializable value such as textContent, outerHTML, or a plain object"
+	}
+	detail := strings.TrimSpace(message[idx+len(marker):])
+	if detail == "" {
+		detail = "evaluate result is not JSON serializable"
+	}
+	return detail + "; return a JSON-serializable value such as textContent, outerHTML, or a plain object"
 }
 
 func (h *SessionController) decodeLiveViewRequest(w http.ResponseWriter, r *http.Request) (liveViewRequest, bool) {
