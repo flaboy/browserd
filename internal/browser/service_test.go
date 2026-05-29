@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,16 @@ func TestSnapshotOutput_UsesPageAsSingleStructure(t *testing.T) {
 	}
 	if _, ok := out.Page.Groups["buttons"]; !ok {
 		t.Fatalf("expected buttons group")
+	}
+}
+
+func TestEvaluate_AwaitsRuntimePromise(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "WithAwaitPromise(true)") {
+		t.Fatalf("Evaluate must await the async runtime script promise")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	browserrt "browserd/internal/runtime"
 	"browserd/internal/session"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -454,7 +455,9 @@ func (s *Service) Evaluate(runtimeSessionID string, input EvaluateInput) (Evalua
 	defer cancel()
 
 	var out EvaluateOutput
-	if err := chromedp.Run(ctx, chromedp.Evaluate(browserEvaluateRuntimeScript(input.Script, string(argsJSON)), &out)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.Evaluate(browserEvaluateRuntimeScript(input.Script, string(argsJSON)), &out, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	})); err != nil {
 		return EvaluateOutput{}, fmt.Errorf("%w: %v", ErrEvaluateFailed, err)
 	}
 	return out, nil
