@@ -1,6 +1,15 @@
 package router
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+
+	"browserd/internal/config"
+	"browserd/internal/liveviewer"
+)
 
 func TestExtractLiveViewToken_UsesFirstPathSegment(t *testing.T) {
 	tests := []struct {
@@ -19,5 +28,31 @@ func TestExtractLiveViewToken_UsesFirstPathSegment(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestNew_ServesBrowserLiveAssetsOutsideTokenPath(t *testing.T) {
+	indexHTML, err := liveviewer.IndexHTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := regexp.MustCompile(`/browser-live/(assets/[^"]+\.js)`).FindSubmatch(indexHTML)
+	if len(matches) != 2 {
+		t.Fatalf("expected browser-live hashed JS asset in index html: %s", string(indexHTML))
+	}
+	handler := New(config.Config{})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/browser-live/"+string(matches[1]), nil)
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "websockify") {
+		t.Fatalf("expected bundled live viewer asset, got %s", rr.Body.String())
+	}
+	if cache := rr.Header().Get("Cache-Control"); !strings.Contains(cache, "immutable") {
+		t.Fatalf("expected immutable cache header, got %q", cache)
 	}
 }

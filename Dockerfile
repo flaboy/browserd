@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1
+FROM node:24-alpine AS web-builder
+WORKDIR /src
+COPY package.json package-lock.json tsconfig.json vite.config.ts ./
+COPY web ./web
+RUN npm ci && npm run build
+
 FROM golang:1.24-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -6,6 +12,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=web-builder /src/internal/liveviewer/dist ./internal/liveviewer/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o /out/browserd ./cmd/browserd
 
 FROM alpine:3.20

@@ -39,11 +39,13 @@ type fakeBrowserRuntime struct {
 
 type fakeLiveProxyBrowserRuntime struct {
 	fakeBrowserRuntime
-	target    string
-	targetErr error
+	target      string
+	targetErr   error
+	targetCalls int
 }
 
 func (f *fakeLiveProxyBrowserRuntime) LiveProxyTarget(_ string) (string, error) {
+	f.targetCalls++
 	if f.targetErr != nil {
 		return "", f.targetErr
 	}
@@ -556,7 +558,42 @@ func TestHandoffComplete_RevokesViewerToken(t *testing.T) {
 	}
 }
 
-func TestServeLiveView_ReturnsUnhealthyWhenLiveProxyTargetFails(t *testing.T) {
+func TestServeLiveView_ServesViewerShellWithoutLiveProxyHealth(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeLiveProxyBrowserRuntime{targetErr: browser.ErrLiveRuntimeUnhealthy}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:      manager,
+		Browser:      browserRuntime,
+		CDPBaseURL:   "ws://browserd:9222/devtools/browser",
+		LiveBaseURL:  "https://browser.example",
+		LiveTokenTTL: 15 * time.Minute,
+		TokenStore:   live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+	token := startControlHandoff(t, handler, rid)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/vnc.html", nil)
+	handler.ServeLiveView(rr, req, token)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected viewer shell to return 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if browserRuntime.targetCalls != 0 {
+		t.Fatalf("expected viewer shell to skip live proxy health, got %d calls", browserRuntime.targetCalls)
+	}
+	if !strings.Contains(rr.Body.String(), "/browser-live/assets/") {
+		t.Fatalf("expected hashed browser-live assets in viewer shell, got %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "/core/") {
+		t.Fatalf("viewer shell must not load noVNC modules under token path, got %s", rr.Body.String())
+	}
+}
+
+func TestServeLiveView_WebsockifyReturnsUnhealthyWhenLiveProxyTargetFails(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
 		Workdir:    t.TempDir(),
@@ -574,7 +611,7 @@ func TestServeLiveView_ReturnsUnhealthyWhenLiveProxyTargetFails(t *testing.T) {
 	token := startControlHandoff(t, handler, rid)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/vnc.html", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/websockify", nil)
 	handler.ServeLiveView(rr, req, token)
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected unhealthy live proxy to return 503, got %d body=%s", rr.Code, rr.Body.String())

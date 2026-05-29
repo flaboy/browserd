@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"html"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -16,6 +14,7 @@ import (
 
 	"browserd/internal/browser"
 	"browserd/internal/live"
+	"browserd/internal/liveviewer"
 	"browserd/internal/runtime"
 	"browserd/internal/session"
 	"browserd/internal/types"
@@ -427,6 +426,18 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
 		return
 	}
+	if !h.isWebsockifyRequest(r, token) {
+		html, err := liveviewer.IndexHTML()
+		if err != nil {
+			types.WriteErr(w, http.StatusInternalServerError, "LIVE_VIEWER_ASSET_MISSING", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(html)
+		return
+	}
 	if liveRuntime, ok := h.browser.(browserLiveProxyRuntime); ok {
 		target, err := liveRuntime.LiveProxyTarget(state.RuntimeSessionID)
 		if err != nil {
@@ -443,9 +454,12 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", "live proxy target is invalid")
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, "<!doctype html><title>browserd live view</title><body data-runtime-session-id=%q data-permission=%q>browserd live view</body>", html.EscapeString(state.RuntimeSessionID), html.EscapeString(string(state.Permission)))
+	types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", "live proxy runtime is not configured")
+}
+
+func (h *SessionController) isWebsockifyRequest(r *http.Request, token string) bool {
+	path := strings.TrimRight(h.noVNCBasePath, "/") + "/" + token + "/websockify"
+	return r.URL.Path == path
 }
 
 func (h *SessionController) proxyLiveView(w http.ResponseWriter, r *http.Request, target string, token string, state live.TokenState) bool {
@@ -474,8 +488,7 @@ func (h *SessionController) shouldTrackHandoffConnection(r *http.Request, token 
 	if state.Permission != live.PermissionControl {
 		return false
 	}
-	path := strings.TrimRight(h.noVNCBasePath, "/") + "/" + token + "/websockify"
-	return r.URL.Path == path
+	return h.isWebsockifyRequest(r, token)
 }
 
 func (h *SessionController) beginHandoffConnection(runtimeSessionID string, handoffID string) {

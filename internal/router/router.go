@@ -10,6 +10,7 @@ import (
 	"browserd/internal/config"
 	"browserd/internal/controller"
 	"browserd/internal/live"
+	"browserd/internal/liveviewer"
 	"browserd/internal/profile"
 	"browserd/internal/runtime"
 	"browserd/internal/session"
@@ -68,11 +69,16 @@ func New(cfg config.Config) http.Handler {
 	if noVNCBasePath == "" {
 		noVNCBasePath = "/v"
 	}
+	liveViewerAssets := http.StripPrefix("/browser-live/", liveviewer.StaticHandler())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
 			types.WriteOK(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/browser-live/"):
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			liveViewerAssets.ServeHTTP(w, r)
 			return
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, noVNCBasePath+"/"):
 			token := extractLiveViewToken(r.URL.Path, noVNCBasePath)
