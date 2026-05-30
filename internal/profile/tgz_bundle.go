@@ -40,6 +40,12 @@ func PackDirToTGZ(srcDir, dstTGZ string) error {
 		if rel == "." {
 			return nil
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return nil
+		}
 		rel = filepath.ToSlash(rel)
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {

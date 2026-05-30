@@ -47,6 +47,32 @@ func TestPackAndUnpackTGZ_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestPackDirToTGZ_SkipsSymlinks(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "Local State"), []byte("state"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Symlink("missing-target", filepath.Join(src, "SingletonCookie")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tgz := filepath.Join(t.TempDir(), "profile.tgz")
+	if err := PackDirToTGZ(src, tgz); err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+
+	dst := t.TempDir()
+	if err := UnpackTGZToDir(tgz, dst); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "SingletonCookie")); !os.IsNotExist(err) {
+		t.Fatalf("expected symlink to be skipped, got err=%v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "Local State")); err != nil || string(b) != "state" {
+		t.Fatalf("expected regular file preserved, body=%q err=%v", string(b), err)
+	}
+}
+
 func TestUnpackTGZToDir_RejectsPathTraversal(t *testing.T) {
 	buf := new(bytes.Buffer)
 	gw := gzip.NewWriter(buf)
