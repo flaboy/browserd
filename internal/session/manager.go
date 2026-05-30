@@ -25,6 +25,8 @@ type CreateInput struct {
 	ExpectedVersion string
 	LeaseID         string
 	TTLSeconds      int
+	FingerprintSeed string
+	ProxyServer     string
 }
 
 type CreateOutput struct {
@@ -51,6 +53,8 @@ type SessionInfo struct {
 	Version          string
 	LeaseID          string
 	ExpiresAt        time.Time
+	FingerprintSeed  string
+	ProxyServer      string
 }
 
 type runtimeSession struct {
@@ -60,6 +64,8 @@ type runtimeSession struct {
 	Version          string
 	LeaseID          string
 	ExpiresAt        time.Time
+	FingerprintSeed  string
+	ProxyServer      string
 }
 
 type Manager interface {
@@ -110,6 +116,9 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 	}
 	if !strings.HasSuffix(strings.TrimSpace(input.S3ProfilePath), "profile.tgz") {
 		return CreateOutput{}, ErrInvalidRequest
+	}
+	if strings.TrimSpace(input.FingerprintSeed) == "" {
+		return CreateOutput{}, fmt.Errorf("%w: fingerprint seed is required", ErrInvalidRequest)
 	}
 
 	ttl := input.TTLSeconds
@@ -164,6 +173,8 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		Version:          resolvedVersion,
 		LeaseID:          leaseID,
 		ExpiresAt:        time.Now().UTC().Add(time.Duration(ttl) * time.Second),
+		FingerprintSeed:  strings.TrimSpace(input.FingerprintSeed),
+		ProxyServer:      strings.TrimSpace(input.ProxyServer),
 	}
 	m.mu.Unlock()
 	return out, nil
@@ -248,5 +259,7 @@ func (m *manager) Get(runtimeSessionID string) (SessionInfo, error) {
 		Version:          s.Version,
 		LeaseID:          s.LeaseID,
 		ExpiresAt:        s.ExpiresAt,
+		FingerprintSeed:  s.FingerprintSeed,
+		ProxyServer:      s.ProxyServer,
 	}, nil
 }

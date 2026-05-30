@@ -88,11 +88,13 @@ func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (br
 type fakeSessionManager struct {
 	createOut   session.CreateOutput
 	createErr   error
+	createCalls []session.CreateInput
 	deleteCalls []string
 	deleteErr   error
 }
 
-func (f *fakeSessionManager) Create(_ session.CreateInput) (session.CreateOutput, error) {
+func (f *fakeSessionManager) Create(input session.CreateInput) (session.CreateOutput, error) {
+	f.createCalls = append(f.createCalls, input)
 	return f.createOut, f.createErr
 }
 
@@ -119,6 +121,7 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 
 	body := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1",
 		"leaseId":"lease_1"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
@@ -156,7 +159,8 @@ func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -186,7 +190,8 @@ func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -213,7 +218,8 @@ func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -229,6 +235,88 @@ func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing
 	}
 }
 
+func TestCreateSession_RequiresFingerprintSeed(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateSession(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "INVALID_FINGERPRINT_SEED") || !strings.Contains(rr.Body.String(), "fingerprintSeed is required") {
+		t.Fatalf("expected actionable fingerprint error, got %s", rr.Body.String())
+	}
+}
+
+func TestCreateSession_RejectsInvalidProxyServer(t *testing.T) {
+	manager := &fakeSessionManager{}
+	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1",
+		"proxyServer":"https://proxy.example.com:443"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateSession(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "INVALID_PROXY_SERVER") {
+		t.Fatalf("expected invalid proxy error, got %s", rr.Body.String())
+	}
+	if len(manager.createCalls) != 0 {
+		t.Fatalf("invalid proxy must not create session, got %+v", manager.createCalls)
+	}
+}
+
+func TestCreateSession_ForwardsFingerprintSeedAndProxyServer(t *testing.T) {
+	manager := &fakeSessionManager{
+		createOut: session.CreateOutput{
+			RuntimeSessionID: "rt_1",
+			CDPWsURL:         "ws://browserd:9222/devtools/browser/rt_1",
+			LeaseID:          "lease_1",
+			ResolvedVersion:  "new",
+		},
+	}
+	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1",
+		"proxyServer":"http://user:pass@proxy.example.com:8080"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateSession(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.createCalls) != 1 {
+		t.Fatalf("expected one create call, got %+v", manager.createCalls)
+	}
+	got := manager.createCalls[0]
+	if got.FingerprintSeed != "fp_seed_1" {
+		t.Fatalf("fingerprint seed mismatch: %+v", got)
+	}
+	if got.ProxyServer != "http://user:pass@proxy.example.com:8080" {
+		t.Fatalf("proxy server mismatch: %+v", got)
+	}
+}
+
 func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
@@ -238,7 +326,8 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
@@ -271,7 +360,8 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
@@ -891,7 +981,8 @@ func createTestSession(t *testing.T, handler *controller.SessionController) stri
 	t.Helper()
 
 	body := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/opaque/profile.tgz"
+		"s3ProfilePath":"s3://bucket/browser-sessions/opaque/profile.tgz",
+		"fingerprintSeed":"fp_seed_1"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

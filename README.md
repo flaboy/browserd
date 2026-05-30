@@ -42,12 +42,17 @@ Content-Type: application/json
 
 {
   "s3ProfilePath": "s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+  "fingerprintSeed": "fp_7f8c2a0e-57f7-4f34-93d3-45830f3c6c6d",
+  "proxyServer": "http://user:pass@proxy.example.com:8080",
   "expectedVersion": "v0",
   "leaseId": "lease_1"
 }
 ```
 
 `POST /v1/sessions` 是同步初始化接口：
+- `fingerprintSeed` 必填。browserd 不提供无指纹 session 路径，缺失时直接返回 `INVALID_FINGERPRINT_SEED`
+- `proxyServer` 可选，支持 `http://host:port`、`http://user:pass@host:port`、`socks5://host:port`、`socks5://user:pass@host:port`
+- 代理认证信息只用于 Chromium 连接代理；日志、错误和 Chrome 启动参数不得包含明文密码
 - 返回 200 前，Chromium 已启动且 DevTools websocket 已 ready
 - Chromium 仍以 `about:blank` 启动，不额外执行首屏 navigate
 - 若 readiness 失败，接口返回 `503 SESSION_INIT_FAILED`

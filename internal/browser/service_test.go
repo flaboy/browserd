@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +79,101 @@ func TestBuildChromeArgs_HeadedWhenLiveViewEnabled(t *testing.T) {
 	for _, arg := range args {
 		if arg == "--headless=new" {
 			t.Fatalf("did not expect headless arg in headed mode: %+v", args)
+		}
+	}
+}
+
+func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
+	proxy, err := ParseProxyServer("http://user:pass@proxy.example.com:8080")
+	if err != nil {
+		t.Fatalf("parse proxy: %v", err)
+	}
+	fp := FingerprintFromSeed("fp_seed_1")
+	args := buildChromeArgs(BrowserOptions{
+		UserDataDir: "/tmp/profile",
+		Headless:    true,
+		Fingerprint: fp,
+		Proxy:       proxy,
+	})
+
+	want := []string{
+		"--proxy-server=http://proxy.example.com:8080",
+		fmt.Sprintf("--window-size=%d,%d", fp.ViewportWidth, fp.ViewportHeight),
+		"--lang=" + fp.Locale,
+		"--user-agent=" + fp.UserAgent,
+		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+	}
+	for _, expected := range want {
+		found := false
+		for _, arg := range args {
+			if arg == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected arg %q in %+v", expected, args)
+		}
+	}
+	for _, arg := range args {
+		if strings.Contains(arg, "user:pass") {
+			t.Fatalf("proxy credentials must not be placed in chrome args: %+v", args)
+		}
+	}
+}
+
+func TestParseProxyServer_MasksCredentialsAndRejectsInvalidScheme(t *testing.T) {
+	proxy, err := ParseProxyServer("socks5://user:pass@proxy.example.com:1080")
+	if err != nil {
+		t.Fatalf("parse proxy: %v", err)
+	}
+	if proxy.ChromeServer != "socks5://proxy.example.com:1080" {
+		t.Fatalf("unexpected chrome server: %+v", proxy)
+	}
+	if proxy.Masked != "socks5://***:***@proxy.example.com:1080" {
+		t.Fatalf("unexpected masked proxy: %+v", proxy)
+	}
+	if proxy.Username != "user" || proxy.Password != "pass" {
+		t.Fatalf("unexpected credentials: %+v", proxy)
+	}
+
+	_, err = ParseProxyServer("ftp://proxy.example.com:21")
+	if err == nil {
+		t.Fatalf("expected invalid proxy server")
+	}
+	if !errors.Is(err, ErrInvalidProxyServer) {
+		t.Fatalf("expected ErrInvalidProxyServer, got %v", err)
+	}
+	_, err = ParseProxyServer("https://proxy.example.com:443")
+	if err == nil {
+		t.Fatalf("expected https proxy to be rejected")
+	}
+	if !errors.Is(err, ErrInvalidProxyServer) {
+		t.Fatalf("expected ErrInvalidProxyServer, got %v", err)
+	}
+}
+
+func TestFingerprintFromSeed_IsStableAndVariesBySeed(t *testing.T) {
+	first := FingerprintFromSeed("fp_seed_1")
+	again := FingerprintFromSeed("fp_seed_1")
+	other := FingerprintFromSeed("fp_seed_2")
+
+	if first != again {
+		t.Fatalf("expected same seed to produce same fingerprint: %+v %+v", first, again)
+	}
+	if first == other {
+		t.Fatalf("expected different seeds to produce different fingerprint: %+v", first)
+	}
+	if first.Locale == "" || first.Timezone == "" || first.UserAgent == "" || first.ViewportWidth == 0 || first.HardwareConcurrency == 0 {
+		t.Fatalf("expected complete fingerprint: %+v", first)
+	}
+}
+
+func TestFingerprintInitScript_ContainsStableOverrides(t *testing.T) {
+	script := fingerprintInitScript(FingerprintFromSeed("fp_seed_1"))
+	for _, expected := range []string{"Navigator", "deviceMemory", "WebGLRenderingContext", "HTMLCanvasElement", "AudioContext", "RTCPeerConnection"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("expected init script to contain %q, got %s", expected, script)
 		}
 	}
 }

@@ -110,6 +110,8 @@ type createSessionRequest struct {
 	ExpectedVersion string `json:"expectedVersion,omitempty"`
 	TTLSeconds      int    `json:"ttlSec,omitempty"`
 	LeaseID         string `json:"leaseId,omitempty"`
+	FingerprintSeed string `json:"fingerprintSeed,omitempty"`
+	ProxyServer     string `json:"proxyServer,omitempty"`
 }
 
 type commitSessionRequest struct {
@@ -172,11 +174,21 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
+	if strings.TrimSpace(req.FingerprintSeed) == "" {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_FINGERPRINT_SEED", "fingerprintSeed is required")
+		return
+	}
+	if _, err := browser.ParseProxyServer(req.ProxyServer); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_PROXY_SERVER", err.Error())
+		return
+	}
 	out, err := h.manager.Create(session.CreateInput{
 		S3ProfilePath:   req.S3ProfilePath,
 		ExpectedVersion: req.ExpectedVersion,
 		TTLSeconds:      req.TTLSeconds,
 		LeaseID:         req.LeaseID,
+		FingerprintSeed: req.FingerprintSeed,
+		ProxyServer:     req.ProxyServer,
 	})
 	if err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
@@ -186,6 +198,10 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		if err := h.browser.PrepareSession(out.RuntimeSessionID); err != nil {
 			_ = h.browser.Close(out.RuntimeSessionID)
 			_ = h.manager.Delete(out.RuntimeSessionID)
+			if errors.Is(err, browser.ErrFingerprintInitFailed) {
+				types.WriteErr(w, http.StatusServiceUnavailable, "FINGERPRINT_INIT_FAILED", err.Error())
+				return
+			}
 			types.WriteErr(w, http.StatusServiceUnavailable, "SESSION_INIT_FAILED", err.Error())
 			return
 		}

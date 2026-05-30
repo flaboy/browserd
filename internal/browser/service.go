@@ -527,6 +527,11 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	if err != nil {
 		return nil, err
 	}
+	fp := FingerprintFromSeed(info.FingerprintSeed)
+	proxy, err := ParseProxyServer(info.ProxyServer)
+	if err != nil {
+		return nil, err
+	}
 	chromeBin := strings.TrimSpace(os.Getenv("CHROME_BIN"))
 	if chromeBin == "" {
 		chromeBin = "/usr/bin/chromium-browser"
@@ -553,6 +558,8 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	cmd := exec.Command(chromeBin, buildChromeArgs(BrowserOptions{
 		UserDataDir: info.ProfileDir,
 		Headless:    !liveEnabled,
+		Fingerprint: fp,
+		Proxy:       proxy,
 	})...)
 	cmd.Env = append(cmd.Environ(), chromeEnv...)
 	if err := cmd.Start(); err != nil {
@@ -575,6 +582,16 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(rootCtx, wsURL)
 	pageCtx, pageCancel := chromedp.NewContext(allocCtx)
 	if err := chromedp.Run(pageCtx); err != nil {
+		pageCancel()
+		allocCancel()
+		rootCancel()
+		_ = cmd.Process.Kill()
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
+		return nil, err
+	}
+	if err := applyRuntimeOptions(pageCtx, fp, proxy); err != nil {
 		pageCancel()
 		allocCancel()
 		rootCancel()
@@ -636,6 +653,8 @@ func jsStringArray(values []string) string {
 type BrowserOptions struct {
 	UserDataDir string
 	Headless    bool
+	Fingerprint FingerprintConfig
+	Proxy       ProxyConfig
 }
 
 func buildChromeArgs(opts BrowserOptions) []string {
@@ -646,6 +665,20 @@ func buildChromeArgs(opts BrowserOptions) []string {
 		"--no-default-browser-check",
 		"--disable-dev-shm-usage",
 		"--remote-debugging-port=0",
+		"--force-color-profile=srgb",
+		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+	}
+	if opts.Proxy.ChromeServer != "" {
+		args = append(args, "--proxy-server="+opts.Proxy.ChromeServer)
+	}
+	if opts.Fingerprint.UserAgent != "" {
+		args = append(args, "--user-agent="+opts.Fingerprint.UserAgent)
+	}
+	if opts.Fingerprint.Locale != "" {
+		args = append(args, "--lang="+opts.Fingerprint.Locale)
+	}
+	if opts.Fingerprint.ViewportWidth > 0 && opts.Fingerprint.ViewportHeight > 0 {
+		args = append(args, fmt.Sprintf("--window-size=%d,%d", opts.Fingerprint.ViewportWidth, opts.Fingerprint.ViewportHeight))
 	}
 	if opts.Headless {
 		args = append(args, "--headless=new")

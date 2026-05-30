@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,7 +39,8 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	})
 
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath: profilePath,
+		S3ProfilePath:   profilePath,
+		FingerprintSeed: "fp_seed_1",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -86,7 +88,8 @@ func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath: profilePath,
+		S3ProfilePath:   profilePath,
+		FingerprintSeed: "fp_seed_1",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -108,10 +111,54 @@ func TestManager_CreateRejectsNonProfileTGZPath(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	_, err := mgr.Create(CreateInput{
-		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.zip",
+		S3ProfilePath:   "s3://private/browser-sessions/t/c/s/profile.zip",
+		FingerprintSeed: "fp_seed_1",
 	})
 	if err == nil {
 		t.Fatalf("expected invalid request")
+	}
+}
+
+func TestManager_CreateRejectsMissingFingerprintSeed(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	_, err := mgr.Create(CreateInput{
+		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.tgz",
+	})
+	if err == nil {
+		t.Fatalf("expected invalid request")
+	}
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
+	}
+}
+
+func TestManager_CreateStoresFingerprintSeedAndProxyServer(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	out, err := mgr.Create(CreateInput{
+		S3ProfilePath:   "s3://private/browser-sessions/t/c/s/profile.tgz",
+		FingerprintSeed: "fp_seed_1",
+		ProxyServer:     "http://user:pass@proxy.example.com:8080",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := mgr.Get(out.RuntimeSessionID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if info.FingerprintSeed != "fp_seed_1" {
+		t.Fatalf("fingerprint seed mismatch: %+v", info)
+	}
+	if info.ProxyServer != "http://user:pass@proxy.example.com:8080" {
+		t.Fatalf("proxy server mismatch: %+v", info)
 	}
 }
 

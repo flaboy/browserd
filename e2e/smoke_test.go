@@ -52,7 +52,8 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	createURL := base + "/v1/sessions"
 
 	status, createEnv := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
-		"s3ProfilePath": profilePath,
+		"s3ProfilePath":   profilePath,
+		"fingerprintSeed": "fp_smoke_1",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("create status=%d err=%v", status, createEnv.Error)
@@ -84,6 +85,7 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 
 	status, create2Env := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
 		"s3ProfilePath":   profilePath,
+		"fingerprintSeed": "fp_smoke_1",
 		"expectedVersion": newVersion,
 	})
 	if status != http.StatusOK {
