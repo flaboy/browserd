@@ -52,6 +52,9 @@ func TestPackDirToTGZ_SkipsSymlinks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "Local State"), []byte("state"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(src, "DevToolsActivePort"), []byte("37031\n/devtools/browser/stale"), 0o644); err != nil {
+		t.Fatalf("write transient file: %v", err)
+	}
 	if err := os.Symlink("missing-target", filepath.Join(src, "SingletonCookie")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
@@ -67,6 +70,52 @@ func TestPackDirToTGZ_SkipsSymlinks(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "SingletonCookie")); !os.IsNotExist(err) {
 		t.Fatalf("expected symlink to be skipped, got err=%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "DevToolsActivePort")); !os.IsNotExist(err) {
+		t.Fatalf("expected transient file to be skipped, got err=%v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "Local State")); err != nil || string(b) != "state" {
+		t.Fatalf("expected regular file preserved, body=%q err=%v", string(b), err)
+	}
+}
+
+func TestUnpackTGZToDir_SkipsChromeTransientFiles(t *testing.T) {
+	buf := new(bytes.Buffer)
+	gw := gzip.NewWriter(buf)
+	tw := tar.NewWriter(gw)
+	writeFile := func(name string, body string) {
+		t.Helper()
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     name,
+			Typeflag: tar.TypeReg,
+			Size:     int64(len(body)),
+			Mode:     0o644,
+		}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatalf("write body: %v", err)
+		}
+	}
+	writeFile("DevToolsActivePort", "37031\n/devtools/browser/stale")
+	writeFile("Local State", "state")
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	src := filepath.Join(t.TempDir(), "profile.tgz")
+	if err := os.WriteFile(src, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dst := t.TempDir()
+	if err := UnpackTGZToDir(src, dst); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "DevToolsActivePort")); !os.IsNotExist(err) {
+		t.Fatalf("expected transient file to be skipped on unpack, got err=%v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(dst, "Local State")); err != nil || string(b) != "state" {
 		t.Fatalf("expected regular file preserved, body=%q err=%v", string(b), err)

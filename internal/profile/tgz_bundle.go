@@ -40,13 +40,16 @@ func PackDirToTGZ(srcDir, dstTGZ string) error {
 		if rel == "." {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
+		if shouldSkipProfileEntry(rel) {
+			return nil
+		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -97,6 +100,9 @@ func UnpackTGZToDir(srcTGZ, dstDir string) error {
 		if err != nil {
 			return err
 		}
+		if shouldSkipProfileEntry(hdr.Name) {
+			continue
+		}
 		target := filepath.Join(dstDir, filepath.FromSlash(hdr.Name))
 		cleanTarget := filepath.Clean(target)
 		if !strings.HasPrefix(cleanTarget+string(os.PathSeparator), cleanBase) &&
@@ -128,4 +134,14 @@ func UnpackTGZToDir(srcTGZ, dstDir string) error {
 		}
 	}
 	return nil
+}
+
+func shouldSkipProfileEntry(name string) bool {
+	base := filepath.Base(filepath.FromSlash(strings.TrimSpace(name)))
+	switch base {
+	case "DevToolsActivePort", "SingletonCookie", "SingletonLock", "SingletonSocket":
+		return true
+	default:
+		return false
+	}
 }
