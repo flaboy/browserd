@@ -1,7 +1,8 @@
 {
   "scripts": {
     "build": "vite build",
-    "test": "npm run build"
+    "test": "npm run test:live-viewer && npm run build",
+    "test:live-viewer": "node web/browser-live/live-viewer.test.mjs"
   },
   "dependencies": {
     "@novnc/novnc": "1.5.0"

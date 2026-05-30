@@ -32,7 +32,7 @@ function connect() {
     throw new Error('screen container is missing')
   }
   const rfb = new RFB(screenEl, websocketURL(websockifyPath()))
-  rfb.viewOnly = true
+  rfb.viewOnly = false
   rfb.scaleViewport = true
   rfb.resizeSession = false
   rfb.showDotCursor = true
