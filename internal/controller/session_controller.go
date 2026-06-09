@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"browserd/internal/browser"
+	"browserd/internal/fingerprint"
 	"browserd/internal/live"
 	"browserd/internal/liveviewer"
 	"browserd/internal/runtime"
@@ -106,12 +107,12 @@ func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionControl
 }
 
 type createSessionRequest struct {
-	S3ProfilePath   string `json:"s3ProfilePath"`
-	ExpectedVersion string `json:"expectedVersion,omitempty"`
-	TTLSeconds      int    `json:"ttlSec,omitempty"`
-	LeaseID         string `json:"leaseId,omitempty"`
-	FingerprintSeed string `json:"fingerprintSeed,omitempty"`
-	ProxyServer     string `json:"proxyServer,omitempty"`
+	S3ProfilePath   string             `json:"s3ProfilePath"`
+	ExpectedVersion string             `json:"expectedVersion,omitempty"`
+	TTLSeconds      int                `json:"ttlSec,omitempty"`
+	LeaseID         string             `json:"leaseId,omitempty"`
+	Fingerprint     fingerprint.Config `json:"fingerprint"`
+	ProxyServer     string             `json:"proxyServer,omitempty"`
 }
 
 type commitSessionRequest struct {
@@ -174,8 +175,9 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.FingerprintSeed) == "" {
-		types.WriteErr(w, http.StatusBadRequest, "INVALID_FINGERPRINT_SEED", "fingerprintSeed is required")
+	fp := req.Fingerprint.Normalized()
+	if err := fp.Validate(); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_FINGERPRINT_CONFIG", err.Error())
 		return
 	}
 	if _, err := browser.ParseProxyServer(req.ProxyServer); err != nil {
@@ -187,7 +189,7 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		ExpectedVersion: req.ExpectedVersion,
 		TTLSeconds:      req.TTLSeconds,
 		LeaseID:         req.LeaseID,
-		FingerprintSeed: req.FingerprintSeed,
+		Fingerprint:     fp,
 		ProxyServer:     req.ProxyServer,
 	})
 	if err != nil {

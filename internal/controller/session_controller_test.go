@@ -121,7 +121,7 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 
 	body := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1",
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"leaseId":"lease_1"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
@@ -160,7 +160,7 @@ func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -219,7 +219,7 @@ func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing
 	}
 }
 
-func TestCreateSession_RequiresFingerprintSeed(t *testing.T) {
+func TestCreateSession_RequiresFingerprintConfig(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
 		Workdir:    t.TempDir(),
@@ -253,7 +253,7 @@ func TestCreateSession_RequiresFingerprintSeed(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "INVALID_FINGERPRINT_SEED") || !strings.Contains(rr.Body.String(), "fingerprintSeed is required") {
+	if !strings.Contains(rr.Body.String(), "INVALID_FINGERPRINT_CONFIG") || !strings.Contains(rr.Body.String(), "seed is required") {
 		t.Fatalf("expected actionable fingerprint error, got %s", rr.Body.String())
 	}
 }
@@ -264,7 +264,7 @@ func TestCreateSession_RejectsInvalidProxyServer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1",
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"proxyServer":"https://proxy.example.com:443"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -282,7 +282,7 @@ func TestCreateSession_RejectsInvalidProxyServer(t *testing.T) {
 	}
 }
 
-func TestCreateSession_ForwardsFingerprintSeedAndProxyServer(t *testing.T) {
+func TestCreateSession_ForwardsFingerprintAndProxyServer(t *testing.T) {
 	manager := &fakeSessionManager{
 		createOut: session.CreateOutput{
 			RuntimeSessionID: "rt_1",
@@ -295,7 +295,7 @@ func TestCreateSession_ForwardsFingerprintSeedAndProxyServer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1",
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"proxyServer":"http://user:pass@proxy.example.com:8080"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -309,8 +309,8 @@ func TestCreateSession_ForwardsFingerprintSeedAndProxyServer(t *testing.T) {
 		t.Fatalf("expected one create call, got %+v", manager.createCalls)
 	}
 	got := manager.createCalls[0]
-	if got.FingerprintSeed != "fp_seed_1" {
-		t.Fatalf("fingerprint seed mismatch: %+v", got)
+	if got.Fingerprint.Seed != "fp_seed_1" || got.Fingerprint.Timezone != "America/New_York" || got.Fingerprint.ViewportWidth != 1366 {
+		t.Fatalf("fingerprint mismatch: %+v", got)
 	}
 	if got.ProxyServer != "http://user:pass@proxy.example.com:8080" {
 		t.Fatalf("proxy server mismatch: %+v", got)
@@ -327,7 +327,7 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 
 	create := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
@@ -361,7 +361,7 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 
 	create := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
 	creq.Header.Set("Content-Type", "application/json")
@@ -982,7 +982,7 @@ func createTestSession(t *testing.T, handler *controller.SessionController) stri
 
 	body := []byte(`{
 		"s3ProfilePath":"s3://bucket/browser-sessions/opaque/profile.tgz",
-		"fingerprintSeed":"fp_seed_1"
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

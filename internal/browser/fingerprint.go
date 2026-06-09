@@ -2,11 +2,11 @@ package browser
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"browserd/internal/fingerprint"
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
@@ -16,75 +16,16 @@ import (
 
 var ErrFingerprintInitFailed = fmt.Errorf("fingerprint init failed")
 
-type FingerprintConfig struct {
-	Seed                string
-	Locale              string
-	AcceptLanguage      string
-	Timezone            string
-	Platform            string
-	UserAgent           string
-	ViewportWidth       int64
-	ViewportHeight      int64
-	ScreenWidth         int64
-	ScreenHeight        int64
-	DeviceScaleFactor   float64
-	HardwareConcurrency int64
-	DeviceMemory        int64
-	WebGLVendor         string
-	WebGLRenderer       string
-}
+type FingerprintConfig = fingerprint.Config
 
 func FingerprintFromSeed(seed string) FingerprintConfig {
-	seed = strings.TrimSpace(seed)
-	sum := sha256.Sum256([]byte(seed))
-	pick := func(offset int, size int) int {
-		return int(binary.BigEndian.Uint32(sum[offset:offset+4]) % uint32(size))
-	}
-	locales := []struct {
-		locale         string
-		acceptLanguage string
-		timezone       string
-	}{
-		{"zh-CN", "zh-CN,zh;q=0.9,en;q=0.8", "Asia/Shanghai"},
-		{"en-US", "en-US,en;q=0.9", "America/New_York"},
-		{"ja-JP", "ja-JP,ja;q=0.9,en;q=0.8", "Asia/Tokyo"},
-	}
-	viewports := []struct{ width, height int64 }{{1366, 768}, {1440, 900}, {1536, 864}, {1920, 1080}}
-	hardware := []int64{4, 6, 8, 12}
-	memory := []int64{4, 8, 16}
-	webgl := []struct {
-		vendor   string
-		renderer string
-	}{
-		{"Google Inc. (Intel)", "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"},
-		{"Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Direct3D11 vs_5_0 ps_5_0, D3D11)"},
-		{"Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"},
-	}
-	locale := locales[pick(0, len(locales))]
-	viewport := viewports[pick(4, len(viewports))]
-	webglProfile := webgl[pick(8, len(webgl))]
-	return FingerprintConfig{
-		Seed:                seed,
-		Locale:              locale.locale,
-		AcceptLanguage:      locale.acceptLanguage,
-		Timezone:            locale.timezone,
-		Platform:            "Win32",
-		UserAgent:           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-		ViewportWidth:       viewport.width,
-		ViewportHeight:      viewport.height,
-		ScreenWidth:         viewport.width,
-		ScreenHeight:        viewport.height,
-		DeviceScaleFactor:   1,
-		HardwareConcurrency: hardware[pick(12, len(hardware))],
-		DeviceMemory:        memory[pick(16, len(memory))],
-		WebGLVendor:         webglProfile.vendor,
-		WebGLRenderer:       webglProfile.renderer,
-	}
+	return fingerprint.FromSeed(seed)
 }
 
 func applyRuntimeOptions(ctx context.Context, fp FingerprintConfig, proxy ProxyConfig) error {
-	if fp.Seed == "" {
-		return fmt.Errorf("%w: fingerprint seed is required", ErrFingerprintInitFailed)
+	fp = fp.Normalized()
+	if err := fp.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrFingerprintInitFailed, err)
 	}
 	if proxy.HasAuth() {
 		chromedp.ListenTarget(ctx, func(ev any) {
@@ -120,7 +61,7 @@ func applyRuntimeOptions(ctx context.Context, fp FingerprintConfig, proxy ProxyC
 					{Brand: "Google Chrome", Version: "125.0.0.0"},
 					{Brand: "Not.A/Brand", Version: "24.0.0.0"},
 				},
-				Platform:     "Windows",
+				Platform:     fp.OS,
 				Architecture: "x86",
 				Bitness:      "64",
 				Mobile:       false,
@@ -148,6 +89,8 @@ func applyRuntimeOptions(ctx context.Context, fp FingerprintConfig, proxy ProxyC
 func fingerprintInitScript(fp FingerprintConfig) string {
 	payload, _ := json.Marshal(map[string]any{
 		"platform":            fp.Platform,
+		"language":            fp.Locale,
+		"languages":           fp.Languages,
 		"deviceMemory":        fp.DeviceMemory,
 		"hardwareConcurrency": fp.HardwareConcurrency,
 		"webglVendor":         fp.WebGLVendor,
@@ -159,6 +102,8 @@ func fingerprintInitScript(fp FingerprintConfig) string {
   const define = (obj, key, value) => {
     try { Object.defineProperty(obj, key, { get: () => value, configurable: true }); } catch {}
   };
+  define(Navigator.prototype, "language", fp.language);
+  define(Navigator.prototype, "languages", fp.languages);
   define(Navigator.prototype, "platform", fp.platform);
   define(Navigator.prototype, "deviceMemory", fp.deviceMemory);
   define(Navigator.prototype, "hardwareConcurrency", fp.hardwareConcurrency);

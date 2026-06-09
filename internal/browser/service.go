@@ -527,7 +527,7 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	if err != nil {
 		return nil, err
 	}
-	fp := FingerprintFromSeed(info.FingerprintSeed)
+	fp := info.Fingerprint
 	proxy, err := ParseProxyServer(info.ProxyServer)
 	if err != nil {
 		return nil, err
