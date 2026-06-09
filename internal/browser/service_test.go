@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -158,10 +159,10 @@ func TestFingerprintFromSeed_IsStableAndVariesBySeed(t *testing.T) {
 	again := FingerprintFromSeed("fp_seed_1")
 	other := FingerprintFromSeed("fp_seed_2")
 
-	if first != again {
+	if !reflect.DeepEqual(first, again) {
 		t.Fatalf("expected same seed to produce same fingerprint: %+v %+v", first, again)
 	}
-	if first == other {
+	if reflect.DeepEqual(first, other) {
 		t.Fatalf("expected different seeds to produce different fingerprint: %+v", first)
 	}
 	if first.Locale == "" || first.Timezone == "" || first.UserAgent == "" || first.ViewportWidth == 0 || first.HardwareConcurrency == 0 {

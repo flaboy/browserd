@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"browserd/internal/fingerprint"
 	"browserd/internal/profile"
 )
 
@@ -25,7 +26,7 @@ type CreateInput struct {
 	ExpectedVersion string
 	LeaseID         string
 	TTLSeconds      int
-	FingerprintSeed string
+	Fingerprint     fingerprint.Config
 	ProxyServer     string
 }
 
@@ -53,7 +54,7 @@ type SessionInfo struct {
 	Version          string
 	LeaseID          string
 	ExpiresAt        time.Time
-	FingerprintSeed  string
+	Fingerprint      fingerprint.Config
 	ProxyServer      string
 }
 
@@ -64,7 +65,7 @@ type runtimeSession struct {
 	Version          string
 	LeaseID          string
 	ExpiresAt        time.Time
-	FingerprintSeed  string
+	Fingerprint      fingerprint.Config
 	ProxyServer      string
 }
 
@@ -117,8 +118,9 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 	if !strings.HasSuffix(strings.TrimSpace(input.S3ProfilePath), "profile.tgz") {
 		return CreateOutput{}, ErrInvalidRequest
 	}
-	if strings.TrimSpace(input.FingerprintSeed) == "" {
-		return CreateOutput{}, fmt.Errorf("%w: fingerprint seed is required", ErrInvalidRequest)
+	fp := input.Fingerprint.Normalized()
+	if err := fp.Validate(); err != nil {
+		return CreateOutput{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
 	ttl := input.TTLSeconds
@@ -173,7 +175,7 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		Version:          resolvedVersion,
 		LeaseID:          leaseID,
 		ExpiresAt:        time.Now().UTC().Add(time.Duration(ttl) * time.Second),
-		FingerprintSeed:  strings.TrimSpace(input.FingerprintSeed),
+		Fingerprint:      fp,
 		ProxyServer:      strings.TrimSpace(input.ProxyServer),
 	}
 	m.mu.Unlock()
@@ -259,7 +261,7 @@ func (m *manager) Get(runtimeSessionID string) (SessionInfo, error) {
 		Version:          s.Version,
 		LeaseID:          s.LeaseID,
 		ExpiresAt:        s.ExpiresAt,
-		FingerprintSeed:  s.FingerprintSeed,
+		Fingerprint:      s.Fingerprint,
 		ProxyServer:      s.ProxyServer,
 	}, nil
 }

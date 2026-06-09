@@ -42,7 +42,25 @@ Content-Type: application/json
 
 {
   "s3ProfilePath": "s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-  "fingerprintSeed": "fp_7f8c2a0e-57f7-4f34-93d3-45830f3c6c6d",
+  "fingerprint": {
+    "seed": "fp_7f8c2a0e-57f7-4f34-93d3-45830f3c6c6d",
+    "locale": "en-US",
+    "languages": ["en-US", "en"],
+    "acceptLanguage": "en-US,en;q=0.9",
+    "timezone": "America/New_York",
+    "platform": "Win32",
+    "os": "Windows",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "viewportWidth": 1366,
+    "viewportHeight": 768,
+    "screenWidth": 1366,
+    "screenHeight": 768,
+    "deviceScaleFactor": 1,
+    "hardwareConcurrency": 8,
+    "deviceMemory": 8,
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel)"
+  },
   "proxyServer": "http://user:pass@proxy.example.com:8080",
   "expectedVersion": "v0",
   "leaseId": "lease_1"
@@ -50,7 +68,9 @@ Content-Type: application/json
 ```
 
 `POST /v1/sessions` 是同步初始化接口：
-- `fingerprintSeed` 必填。browserd 不提供无指纹 session 路径，缺失时直接返回 `INVALID_FINGERPRINT_SEED`
+- `fingerprint` 必填，且必须传完整浏览器主体配置，包括 `seed`、`locale`、`languages`、`acceptLanguage`、`timezone`、`platform`、`os`、`userAgent`、视口/屏幕尺寸、硬件并发、内存与 WebGL 信息
+- seed-only 请求不再支持；缺失或不完整时直接返回 `INVALID_FINGERPRINT_CONFIG`
+- browserd 不从 seed 推导运行时配置；调用方必须把数据库中的完整 fingerprint 配置传入本接口
 - `proxyServer` 可选，支持 `http://host:port`、`http://user:pass@host:port`、`socks5://host:port`、`socks5://user:pass@host:port`
 - 代理认证信息只用于 Chromium 连接代理；日志、错误和 Chrome 启动参数不得包含明文密码
 - 返回 200 前，Chromium 已启动且 DevTools websocket 已 ready

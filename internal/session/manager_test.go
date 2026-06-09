@@ -7,8 +7,31 @@ import (
 	"path/filepath"
 	"testing"
 
+	"browserd/internal/fingerprint"
 	"browserd/internal/profile"
 )
+
+func testFingerprintConfig() fingerprint.Config {
+	return fingerprint.Config{
+		Seed:                "fp_seed_1",
+		Locale:              "en-US",
+		Languages:           []string{"en-US", "en"},
+		AcceptLanguage:      "en-US,en;q=0.9",
+		Timezone:            "America/New_York",
+		Platform:            "Win32",
+		OS:                  "Windows",
+		UserAgent:           "Mozilla/5.0 test",
+		ViewportWidth:       1366,
+		ViewportHeight:      768,
+		ScreenWidth:         1366,
+		ScreenHeight:        768,
+		DeviceScaleFactor:   1,
+		HardwareConcurrency: 8,
+		DeviceMemory:        8,
+		WebGLVendor:         "Google Inc.",
+		WebGLRenderer:       "ANGLE Test",
+	}
+}
 
 func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	tmp := t.TempDir()
@@ -39,8 +62,8 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	})
 
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath:   profilePath,
-		FingerprintSeed: "fp_seed_1",
+		S3ProfilePath: profilePath,
+		Fingerprint:   testFingerprintConfig(),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -88,8 +111,8 @@ func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath:   profilePath,
-		FingerprintSeed: "fp_seed_1",
+		S3ProfilePath: profilePath,
+		Fingerprint:   testFingerprintConfig(),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -111,15 +134,15 @@ func TestManager_CreateRejectsNonProfileTGZPath(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	_, err := mgr.Create(CreateInput{
-		S3ProfilePath:   "s3://private/browser-sessions/t/c/s/profile.zip",
-		FingerprintSeed: "fp_seed_1",
+		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.zip",
+		Fingerprint:   testFingerprintConfig(),
 	})
 	if err == nil {
 		t.Fatalf("expected invalid request")
 	}
 }
 
-func TestManager_CreateRejectsMissingFingerprintSeed(t *testing.T) {
+func TestManager_CreateRejectsMissingFingerprintConfig(t *testing.T) {
 	mgr := NewManager(ManagerOptions{
 		Store:      profile.NewMemoryStore(),
 		Workdir:    t.TempDir(),
@@ -136,16 +159,16 @@ func TestManager_CreateRejectsMissingFingerprintSeed(t *testing.T) {
 	}
 }
 
-func TestManager_CreateStoresFingerprintSeedAndProxyServer(t *testing.T) {
+func TestManager_CreateStoresFingerprintAndProxyServer(t *testing.T) {
 	mgr := NewManager(ManagerOptions{
 		Store:      profile.NewMemoryStore(),
 		Workdir:    t.TempDir(),
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath:   "s3://private/browser-sessions/t/c/s/profile.tgz",
-		FingerprintSeed: "fp_seed_1",
-		ProxyServer:     "http://user:pass@proxy.example.com:8080",
+		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.tgz",
+		Fingerprint:   testFingerprintConfig(),
+		ProxyServer:   "http://user:pass@proxy.example.com:8080",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -154,8 +177,8 @@ func TestManager_CreateStoresFingerprintSeedAndProxyServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if info.FingerprintSeed != "fp_seed_1" {
-		t.Fatalf("fingerprint seed mismatch: %+v", info)
+	if info.Fingerprint.Seed != "fp_seed_1" || info.Fingerprint.Timezone != "America/New_York" {
+		t.Fatalf("fingerprint mismatch: %+v", info)
 	}
 	if info.ProxyServer != "http://user:pass@proxy.example.com:8080" {
 		t.Fatalf("proxy server mismatch: %+v", info)

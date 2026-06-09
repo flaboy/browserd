@@ -42,6 +42,33 @@ func mustDoJSON(t *testing.T, method, url string, body any) (int, envelope) {
 	return resp.StatusCode, env
 }
 
+func smokeFingerprint() map[string]any {
+	return map[string]any{
+		"seed":                "fp_smoke_1",
+		"userAgent":           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+		"acceptLanguage":      "en-US,en;q=0.9",
+		"locale":              "en-US",
+		"languages":           []string{"en-US", "en"},
+		"timezone":            "America/New_York",
+		"platform":            "Win32",
+		"os":                  "Windows",
+		"viewportWidth":       1366,
+		"viewportHeight":      768,
+		"screenWidth":         1366,
+		"screenHeight":        768,
+		"deviceScaleFactor":   1,
+		"hardwareConcurrency": 8,
+		"deviceMemory":        8,
+		"webglVendor":         "Google Inc. (Intel)",
+		"webglRenderer":       "ANGLE (Intel)",
+	}
+}
+
+func resultString(env envelope, key string) string {
+	result, _ := env.Data["result"].(map[string]any)
+	return fmt.Sprint(result[key])
+}
+
 func TestBrowserdMinIOSmoke(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("BROWSERD_BASE_URL"), "/")
 	if base == "" {
@@ -52,8 +79,8 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	createURL := base + "/v1/sessions"
 
 	status, createEnv := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
-		"s3ProfilePath":   profilePath,
-		"fingerprintSeed": "fp_smoke_1",
+		"s3ProfilePath": profilePath,
+		"fingerprint":   smokeFingerprint(),
 	})
 	if status != http.StatusOK {
 		t.Fatalf("create status=%d err=%v", status, createEnv.Error)
@@ -70,6 +97,34 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("navigate after create status=%d err=%v", status, navEnv.Error)
 	}
+	status, evalEnv := mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID+"/evaluate", map[string]any{
+		"script": `return {
+			userAgent: navigator.userAgent,
+			language: navigator.language,
+			languages: navigator.languages,
+			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			platform: navigator.platform,
+			width: screen.width,
+			height: screen.height,
+			hardwareConcurrency: navigator.hardwareConcurrency,
+			deviceMemory: navigator.deviceMemory
+		}`,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("evaluate fingerprint status=%d err=%v", status, evalEnv.Error)
+	}
+	if resultString(evalEnv, "timezone") != "America/New_York" {
+		t.Fatalf("timezone fingerprint mismatch: %+v", evalEnv.Data["result"])
+	}
+	if resultString(evalEnv, "platform") != "Win32" {
+		t.Fatalf("platform fingerprint mismatch: %+v", evalEnv.Data["result"])
+	}
+	if resultString(evalEnv, "language") != "en-US" {
+		t.Fatalf("language fingerprint mismatch: %+v", evalEnv.Data["result"])
+	}
+	if resultString(evalEnv, "width") != "1366" || resultString(evalEnv, "height") != "768" {
+		t.Fatalf("screen fingerprint mismatch: %+v", evalEnv.Data["result"])
+	}
 
 	commitURL := base + "/v1/sessions/" + runtimeSessionID + "/commit"
 	status, commitEnv := mustDoJSON(t, http.MethodPost, commitURL, map[string]any{
@@ -85,7 +140,7 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 
 	status, create2Env := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
 		"s3ProfilePath":   profilePath,
-		"fingerprintSeed": "fp_smoke_1",
+		"fingerprint":     smokeFingerprint(),
 		"expectedVersion": newVersion,
 	})
 	if status != http.StatusOK {
