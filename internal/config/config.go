@@ -20,6 +20,9 @@ type Config struct {
 	S3AccessKeyID     string
 	S3SecretAccessKey string
 	S3ForcePathStyle  bool
+	ProxyHop          string
+	ProxyWorkerURL    string
+	ProxyWorkerToken  string
 }
 
 func Load() Config {
@@ -61,6 +64,9 @@ func Load() Config {
 	}
 	forcePathStyle := strings.EqualFold(strings.TrimSpace(os.Getenv("BROWSERD_S3_FORCE_PATH_STYLE")), "true") ||
 		strings.TrimSpace(os.Getenv("BROWSERD_S3_FORCE_PATH_STYLE")) == "1"
+	proxyHop := strings.ToLower(strings.TrimSpace(os.Getenv("BROWSERD_PROXY_HOP")))
+	proxyWorkerURL := strings.TrimSpace(os.Getenv("BROWSERD_PROXY_WORKER_URL"))
+	proxyWorkerToken := strings.TrimSpace(os.Getenv("BROWSERD_PROXY_WORKER_TOKEN"))
 	return Config{
 		Port:              port,
 		CDPBaseURL:        strings.TrimRight(cdpBase, "/"),
@@ -74,5 +80,8 @@ func Load() Config {
 		S3AccessKeyID:     strings.TrimSpace(os.Getenv("BROWSERD_S3_ACCESS_KEY_ID")),
 		S3SecretAccessKey: strings.TrimSpace(os.Getenv("BROWSERD_S3_SECRET_ACCESS_KEY")),
 		S3ForcePathStyle:  forcePathStyle,
+		ProxyHop:          proxyHop,
+		ProxyWorkerURL:    proxyWorkerURL,
+		ProxyWorkerToken:  proxyWorkerToken,
 	}
 }

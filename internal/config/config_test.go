@@ -33,3 +33,29 @@ func TestLoadDefaultsLiveViewSettings(t *testing.T) {
 		t.Fatalf("unexpected default base path: %q", cfg.NoVNCBasePath)
 	}
 }
+
+func TestLoad_CloudflareWorkerProxyHopConfig(t *testing.T) {
+	t.Setenv("BROWSERD_PROXY_HOP", "cloudflare-worker")
+	t.Setenv("BROWSERD_PROXY_WORKER_URL", "wss://proxy-hop.example.workers.dev/tunnel")
+	t.Setenv("BROWSERD_PROXY_WORKER_TOKEN", "worker-token")
+
+	cfg := Load()
+
+	if cfg.ProxyHop != "cloudflare-worker" {
+		t.Fatalf("unexpected proxy hop: %q", cfg.ProxyHop)
+	}
+	if cfg.ProxyWorkerURL != "wss://proxy-hop.example.workers.dev/tunnel" {
+		t.Fatalf("unexpected worker url: %q", cfg.ProxyWorkerURL)
+	}
+	if cfg.ProxyWorkerToken != "worker-token" {
+		t.Fatalf("unexpected worker token")
+	}
+}
+
+func TestLoad_DefaultProxyHopDisabled(t *testing.T) {
+	cfg := Load()
+
+	if cfg.ProxyHop != "" || cfg.ProxyWorkerURL != "" || cfg.ProxyWorkerToken != "" {
+		t.Fatalf("expected proxy hop disabled by default, got %+v", cfg)
+	}
+}

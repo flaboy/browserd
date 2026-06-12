@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"browserd/internal/profile"
 	browserrt "browserd/internal/runtime"
+	"browserd/internal/session"
 )
 
 type fakeAssetStore struct {
@@ -23,6 +25,48 @@ type fakeAssetPut struct {
 	URI         string
 	Body        []byte
 	ContentType string
+}
+
+func TestNewService_AcceptsProxyHopOptions(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{
+		Sessions: session.NewManager(session.ManagerOptions{
+			Store:      profile.NewMemoryStore(),
+			Workdir:    t.TempDir(),
+			CDPBaseURL: "ws://browserd:9222/devtools/browser",
+		}),
+		State: browserrt.NewState(),
+		ProxyHop: ProxyHopOptions{
+			Mode:        "cloudflare-worker",
+			WorkerURL:   "wss://proxy-hop.example.workers.dev/tunnel",
+			WorkerToken: "worker-token",
+		},
+	})
+
+	if svc.proxyHop.Mode != "cloudflare-worker" {
+		t.Fatalf("proxy hop was not stored: %+v", svc.proxyHop)
+	}
+}
+
+func TestServiceProxyHopMode_RequiresCompleteWorkerConfig(t *testing.T) {
+	proxy, err := ParseProxyServer("http://user:pass@proxy.example.com:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewServiceWithOptions(ServiceOptions{
+		ProxyHop: ProxyHopOptions{Mode: "cloudflare-worker"},
+	})
+
+	useHop, err := svc.proxyHopMode(proxy)
+
+	if err == nil {
+		t.Fatalf("expected missing proxy hop config error")
+	}
+	if !errors.Is(err, ErrProxyHopConfigMissing) {
+		t.Fatalf("expected ErrProxyHopConfigMissing, got %v", err)
+	}
+	if useHop {
+		t.Fatalf("did not expect proxy hop with incomplete config")
+	}
 }
 
 func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, contentType string) error {
@@ -123,6 +167,26 @@ func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
 	}
 }
 
+func TestBuildChromeArgs_UsesProxyHopLocalProxy(t *testing.T) {
+	proxy, err := ParseProxyServer("http://user:pass@proxy.example.com:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := buildChromeArgs(BrowserOptions{
+		UserDataDir:         "/tmp/profile",
+		Headless:            true,
+		Proxy:               proxy,
+		ProxyOverrideServer: "http://127.0.0.1:34567",
+	})
+
+	if !containsArg(args, "--proxy-server=http://127.0.0.1:34567") {
+		t.Fatalf("expected local proxy override in args: %+v", args)
+	}
+	if containsArg(args, "--proxy-server=http://proxy.example.com:8080") {
+		t.Fatalf("did not expect upstream proxy in chrome args: %+v", args)
+	}
+}
+
 func TestParseProxyServer_MasksCredentialsAndRejectsInvalidScheme(t *testing.T) {
 	proxy, err := ParseProxyServer("socks5://user:pass@proxy.example.com:1080")
 	if err != nil {
@@ -152,6 +216,15 @@ func TestParseProxyServer_MasksCredentialsAndRejectsInvalidScheme(t *testing.T) 
 	if !errors.Is(err, ErrInvalidProxyServer) {
 		t.Fatalf("expected ErrInvalidProxyServer, got %v", err)
 	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFingerprintFromSeed_IsStableAndVariesBySeed(t *testing.T) {

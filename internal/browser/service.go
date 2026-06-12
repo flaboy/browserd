@@ -28,6 +28,7 @@ var (
 	ErrEvaluateFailed        = errors.New("evaluate failed")
 	ErrScreenshotFailed      = errors.New("screenshot failed")
 	ErrPlaywrightUnavailable = errors.New("playwright not available")
+	ErrProxyHopFailed        = errors.New("proxy hop failed")
 )
 
 type NavigateInput struct {
@@ -119,22 +120,37 @@ type Service struct {
 	sessions session.Manager
 	state    *browserrt.State
 	assets   assets.Store
+	proxyHop ProxyHopOptions
 
 	capturePNG func(context.Context) ([]byte, error)
 	mu         sync.Mutex
 	browsers   map[string]*activeBrowser
 }
 
+type ProxyHopOptions struct {
+	Mode        string
+	WorkerURL   string
+	WorkerToken string
+}
+
+type ServiceOptions struct {
+	Sessions session.Manager
+	State    *browserrt.State
+	Assets   assets.Store
+	ProxyHop ProxyHopOptions
+}
+
 type activeBrowser struct {
-	cmd         *exec.Cmd
-	live        *LiveRuntime
-	wsURL       string
-	rootCtx     context.Context
-	rootCancel  context.CancelFunc
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	pageCtx     context.Context
-	pageCancel  context.CancelFunc
+	cmd          *exec.Cmd
+	live         *LiveRuntime
+	wsURL        string
+	rootCtx      context.Context
+	rootCancel   context.CancelFunc
+	allocCtx     context.Context
+	allocCancel  context.CancelFunc
+	pageCtx      context.Context
+	pageCancel   context.CancelFunc
+	proxyAdapter *localProxyAdapter
 }
 
 type snapshotRuntimeEnvelope struct {
@@ -143,13 +159,23 @@ type snapshotRuntimeEnvelope struct {
 }
 
 func NewService(sessions session.Manager, state *browserrt.State, assetStore assets.Store) *Service {
+	return NewServiceWithOptions(ServiceOptions{
+		Sessions: sessions,
+		State:    state,
+		Assets:   assetStore,
+	})
+}
+
+func NewServiceWithOptions(opts ServiceOptions) *Service {
+	state := opts.State
 	if state == nil {
 		state = browserrt.NewState()
 	}
 	return &Service{
-		sessions:   sessions,
+		sessions:   opts.Sessions,
 		state:      state,
-		assets:     assetStore,
+		assets:     opts.Assets,
+		proxyHop:   opts.ProxyHop,
 		capturePNG: capturePagePNG,
 		browsers:   map[string]*activeBrowser{},
 	}
@@ -184,6 +210,9 @@ func (s *Service) Close(runtimeSessionID string) error {
 	}
 	if b.rootCancel != nil {
 		b.rootCancel()
+	}
+	if b.proxyAdapter != nil {
+		_ = b.proxyAdapter.Close()
 	}
 	return nil
 }
@@ -555,16 +584,45 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		chromeEnv = liveRuntime.ChromeEnv()
 	}
 
+	var proxyAdapter *localProxyAdapter
+	proxyOverride := ""
+	useProxyHop, err := s.proxyHopMode(proxy)
+	if err != nil {
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
+		return nil, err
+	}
+	if useProxyHop {
+		proxyAdapter = newLocalProxyAdapter(localProxyAdapterOptions{
+			RuntimeSessionID: runtimeSessionID,
+			UpstreamProxy:    proxy,
+			WorkerURL:        s.proxyHop.WorkerURL,
+			WorkerToken:      s.proxyHop.WorkerToken,
+		})
+		if err := proxyAdapter.Start(context.Background()); err != nil {
+			if liveRuntime != nil {
+				_ = liveRuntime.Stop(context.Background())
+			}
+			return nil, fmt.Errorf("%w: proxy hop adapter start failed: %v", ErrProxyHopFailed, err)
+		}
+		proxyOverride = proxyAdapter.ChromeProxyServer()
+	}
+
 	cmd := exec.Command(chromeBin, buildChromeArgs(BrowserOptions{
-		UserDataDir: info.ProfileDir,
-		Headless:    !liveEnabled,
-		Fingerprint: fp,
-		Proxy:       proxy,
+		UserDataDir:         info.ProfileDir,
+		Headless:            !liveEnabled,
+		Fingerprint:         fp,
+		Proxy:               proxy,
+		ProxyOverrideServer: proxyOverride,
 	})...)
 	cmd.Env = append(cmd.Environ(), chromeEnv...)
 	if err := cmd.Start(); err != nil {
 		if liveRuntime != nil {
 			_ = liveRuntime.Stop(context.Background())
+		}
+		if proxyAdapter != nil {
+			_ = proxyAdapter.Close()
 		}
 		return nil, err
 	}
@@ -574,6 +632,9 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		_ = cmd.Process.Kill()
 		if liveRuntime != nil {
 			_ = liveRuntime.Stop(context.Background())
+		}
+		if proxyAdapter != nil {
+			_ = proxyAdapter.Close()
 		}
 		return nil, err
 	}
@@ -589,6 +650,9 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		if liveRuntime != nil {
 			_ = liveRuntime.Stop(context.Background())
 		}
+		if proxyAdapter != nil {
+			_ = proxyAdapter.Close()
+		}
 		return nil, err
 	}
 	if err := applyRuntimeOptions(pageCtx, fp, proxy); err != nil {
@@ -599,20 +663,24 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		if liveRuntime != nil {
 			_ = liveRuntime.Stop(context.Background())
 		}
+		if proxyAdapter != nil {
+			_ = proxyAdapter.Close()
+		}
 		return nil, err
 	}
 
 	s.mu.Lock()
 	ab := &activeBrowser{
-		cmd:         cmd,
-		live:        liveRuntime,
-		wsURL:       wsURL,
-		rootCtx:     rootCtx,
-		rootCancel:  rootCancel,
-		allocCtx:    allocCtx,
-		allocCancel: allocCancel,
-		pageCtx:     pageCtx,
-		pageCancel:  pageCancel,
+		cmd:          cmd,
+		live:         liveRuntime,
+		wsURL:        wsURL,
+		rootCtx:      rootCtx,
+		rootCancel:   rootCancel,
+		allocCtx:     allocCtx,
+		allocCancel:  allocCancel,
+		pageCtx:      pageCtx,
+		pageCancel:   pageCancel,
+		proxyAdapter: proxyAdapter,
 	}
 	s.browsers[runtimeSessionID] = ab
 	s.mu.Unlock()
@@ -651,10 +719,11 @@ func jsStringArray(values []string) string {
 }
 
 type BrowserOptions struct {
-	UserDataDir string
-	Headless    bool
-	Fingerprint FingerprintConfig
-	Proxy       ProxyConfig
+	UserDataDir         string
+	Headless            bool
+	Fingerprint         FingerprintConfig
+	Proxy               ProxyConfig
+	ProxyOverrideServer string
 }
 
 func buildChromeArgs(opts BrowserOptions) []string {
@@ -668,8 +737,12 @@ func buildChromeArgs(opts BrowserOptions) []string {
 		"--force-color-profile=srgb",
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 	}
-	if opts.Proxy.ChromeServer != "" {
-		args = append(args, "--proxy-server="+opts.Proxy.ChromeServer)
+	proxyServer := opts.Proxy.ChromeServer
+	if opts.ProxyOverrideServer != "" {
+		proxyServer = opts.ProxyOverrideServer
+	}
+	if proxyServer != "" {
+		args = append(args, "--proxy-server="+proxyServer)
 	}
 	if opts.Fingerprint.UserAgent != "" {
 		args = append(args, "--user-agent="+opts.Fingerprint.UserAgent)
@@ -685,6 +758,19 @@ func buildChromeArgs(opts BrowserOptions) []string {
 	}
 	args = append(args, "--user-data-dir="+opts.UserDataDir, "about:blank")
 	return args
+}
+
+func (s *Service) proxyHopMode(proxy ProxyConfig) (bool, error) {
+	if proxy.Raw == "" {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(s.proxyHop.Mode), "cloudflare-worker") {
+		return false, nil
+	}
+	if strings.TrimSpace(s.proxyHop.WorkerURL) == "" || strings.TrimSpace(s.proxyHop.WorkerToken) == "" {
+		return false, ErrProxyHopConfigMissing
+	}
+	return true, nil
 }
 
 func liveModeEnabled() bool {

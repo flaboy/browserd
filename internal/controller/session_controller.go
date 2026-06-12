@@ -200,7 +200,20 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		if err := h.browser.PrepareSession(out.RuntimeSessionID); err != nil {
 			_ = h.browser.Close(out.RuntimeSessionID)
 			_ = h.manager.Delete(out.RuntimeSessionID)
-			if errors.Is(err, browser.ErrFingerprintInitFailed) {
+			switch {
+			case errors.Is(err, browser.ErrProxyHopConfigMissing):
+				types.WriteErr(w, http.StatusServiceUnavailable, "PROXY_HOP_CONFIG_MISSING", err.Error())
+				return
+			case errors.Is(err, browser.ErrProxyHopConnectFailed):
+				types.WriteErr(w, http.StatusServiceUnavailable, "PROXY_HOP_CONNECT_FAILED", err.Error())
+				return
+			case errors.Is(err, browser.ErrUpstreamProxyAuthFailed):
+				types.WriteErr(w, http.StatusServiceUnavailable, "UPSTREAM_PROXY_AUTH_FAILED", err.Error())
+				return
+			case errors.Is(err, browser.ErrUpstreamProxyConnectFail):
+				types.WriteErr(w, http.StatusServiceUnavailable, "UPSTREAM_PROXY_CONNECT_FAILED", err.Error())
+				return
+			case errors.Is(err, browser.ErrFingerprintInitFailed):
 				types.WriteErr(w, http.StatusServiceUnavailable, "FINGERPRINT_INIT_FAILED", err.Error())
 				return
 			}

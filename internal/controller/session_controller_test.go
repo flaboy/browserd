@@ -208,6 +208,38 @@ func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
 	}
 }
 
+func TestCreateSession_ProxyHopFailureReturnsSpecificError(t *testing.T) {
+	manager := &fakeSessionManager{
+		createOut: session.CreateOutput{
+			RuntimeSessionID: "rt_1",
+			CDPWsURL:         "ws://browserd:9222/devtools/browser/rt_1",
+		},
+	}
+	browserRuntime := &fakeBrowserRuntime{
+		prepareErr: browser.ErrProxyHopConnectFailed,
+	}
+	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
+		"proxyServer":"http://user:pass@proxy.example.com:8080"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	controller.CreateSession(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "PROXY_HOP_CONNECT_FAILED") {
+		t.Fatalf("expected proxy hop error, got %s", rr.Body.String())
+	}
+	if len(manager.deleteCalls) != 1 || manager.deleteCalls[0] != "rt_1" {
+		t.Fatalf("expected session cleanup, got %+v", manager.deleteCalls)
+	}
+}
+
 func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
