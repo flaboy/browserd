@@ -1,0 +1,4 @@
+name = "browserd-proxy-hop"
+main = "proxy-hop-worker.js"
+compatibility_date = "2026-06-12"
+account_id = "26e440ce7905ea82e694460999406956"
