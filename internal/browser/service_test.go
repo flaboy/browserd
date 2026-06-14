@@ -245,9 +245,19 @@ func TestFingerprintFromSeed_IsStableAndVariesBySeed(t *testing.T) {
 
 func TestFingerprintInitScript_ContainsStableOverrides(t *testing.T) {
 	script := fingerprintInitScript(FingerprintFromSeed("fp_seed_1"))
-	for _, expected := range []string{"Navigator", "deviceMemory", "WebGLRenderingContext", "HTMLCanvasElement", "AudioContext", "RTCPeerConnection"} {
+	for _, expected := range []string{"Navigator", "deviceMemory", "WebGLRenderingContext", "AudioContext", "RTCPeerConnection"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("expected init script to contain %q, got %s", expected, script)
+		}
+	}
+}
+
+func TestFingerprintInitScript_DoesNotCorruptCanvasDataURLs(t *testing.T) {
+	script := fingerprintInitScript(FingerprintFromSeed("fp_seed_1"))
+
+	for _, forbidden := range []string{"HTMLCanvasElement.prototype.toDataURL", "canvasMark", `value + ":"`} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("fingerprint init script must not alter canvas data URLs with %q: %s", forbidden, script)
 		}
 	}
 }
