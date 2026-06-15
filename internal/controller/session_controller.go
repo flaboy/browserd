@@ -127,13 +127,18 @@ type navigateRequest struct {
 }
 
 type actRequest struct {
-	Action    string   `json:"action"`
-	Ref       string   `json:"ref,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Key       string   `json:"key,omitempty"`
-	Value     string   `json:"value,omitempty"`
-	Values    []string `json:"values,omitempty"`
-	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Action        string             `json:"action"`
+	Ref           string             `json:"ref,omitempty"`
+	Target        *browser.ActTarget `json:"target,omitempty"`
+	Text          string             `json:"text,omitempty"`
+	Key           string             `json:"key,omitempty"`
+	Value         string             `json:"value,omitempty"`
+	Values        []string           `json:"values,omitempty"`
+	Clear         bool               `json:"clear,omitempty"`
+	Button        string             `json:"button,omitempty"`
+	ClickCount    int                `json:"clickCount,omitempty"`
+	MotionProfile string             `json:"motionProfile,omitempty"`
+	TimeoutMs     int                `json:"timeoutMs,omitempty"`
 }
 
 type screenshotRequest struct {
@@ -329,13 +334,18 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		return
 	}
 	out, err := h.browser.Act(runtimeSessionID, browser.ActInput{
-		Action:    req.Action,
-		Ref:       req.Ref,
-		Text:      req.Text,
-		Key:       req.Key,
-		Value:     req.Value,
-		Values:    req.Values,
-		TimeoutMs: req.TimeoutMs,
+		Action:        req.Action,
+		Ref:           req.Ref,
+		Target:        req.Target,
+		Text:          req.Text,
+		Key:           req.Key,
+		Value:         req.Value,
+		Values:        req.Values,
+		Clear:         req.Clear,
+		Button:        req.Button,
+		ClickCount:    req.ClickCount,
+		MotionProfile: req.MotionProfile,
+		TimeoutMs:     req.TimeoutMs,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)
