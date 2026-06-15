@@ -122,9 +122,6 @@ func fingerprintInitScript(fp FingerprintConfig) string {
       return originalGetParameter2.call(this, parameter);
     };
   }
-  const canvasMark = (value) => value + ":" + fp.seed.slice(0, 8);
-  const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-  HTMLCanvasElement.prototype.toDataURL = function(...args) { return canvasMark(originalToDataURL.apply(this, args)); };
   const originalGetChannelData = AudioBuffer.prototype.getChannelData;
   AudioBuffer.prototype.getChannelData = function(...args) {
     const data = originalGetChannelData.apply(this, args);
