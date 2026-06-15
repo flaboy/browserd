@@ -17,8 +17,10 @@ import (
 	browserrt "browserd/internal/runtime"
 	"browserd/internal/session"
 
+	cdinput "github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 )
 
 var (
@@ -73,13 +75,17 @@ type SnapshotOutput struct {
 }
 
 type ActInput struct {
-	Action    string   `json:"action"`
-	Ref       string   `json:"ref,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Key       string   `json:"key,omitempty"`
-	Value     string   `json:"value,omitempty"`
-	Values    []string `json:"values,omitempty"`
-	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Action        string   `json:"action"`
+	Ref           string   `json:"ref,omitempty"`
+	Text          string   `json:"text,omitempty"`
+	Key           string   `json:"key,omitempty"`
+	Value         string   `json:"value,omitempty"`
+	Values        []string `json:"values,omitempty"`
+	Clear         bool     `json:"clear,omitempty"`
+	Button        string   `json:"button,omitempty"`
+	ClickCount    int      `json:"clickCount,omitempty"`
+	MotionProfile string   `json:"motionProfile,omitempty"`
+	TimeoutMs     int      `json:"timeoutMs,omitempty"`
 }
 
 type ActOutput struct {
@@ -125,6 +131,18 @@ type Service struct {
 	capturePNG func(context.Context) ([]byte, error)
 	mu         sync.Mutex
 	browsers   map[string]*activeBrowser
+	pointers   map[string]pointerState
+}
+
+type pointerState struct {
+	Point       pointerPoint
+	Initialized bool
+}
+
+type browserTarget struct {
+	Selector string
+	Rect     targetRect
+	Editable bool
 }
 
 type ProxyHopOptions struct {
@@ -178,6 +196,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		proxyHop:   opts.ProxyHop,
 		capturePNG: capturePagePNG,
 		browsers:   map[string]*activeBrowser{},
+		pointers:   map[string]pointerState{},
 	}
 }
 
@@ -195,6 +214,7 @@ func (s *Service) Close(runtimeSessionID string) error {
 		return nil
 	}
 	delete(s.browsers, runtimeSessionID)
+	delete(s.pointers, runtimeSessionID)
 	if b.cmd != nil && b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
 		_, _ = b.cmd.Process.Wait()
@@ -336,9 +356,8 @@ func (s *Service) Snapshot(runtimeSessionID string, input SnapshotInput) (Snapsh
 }
 
 func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error) {
-	refState, err := s.state.GetRef(runtimeSessionID, input.Ref)
-	if err != nil {
-		return ActOutput{}, err
+	if input.Action == "type" && input.Ref == "" {
+		return ActOutput{}, ErrInvalidRequest
 	}
 	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, input.TimeoutMs)
 	if err != nil {
@@ -346,16 +365,35 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 	}
 	defer cancel()
 
-	selector := refState.Selector
-	if err := validateActionRef(input.Action, refState); err != nil {
-		return ActOutput{}, err
-	}
 	switch input.Action {
 	case "click":
-		err = chromedp.Run(ctx, chromedp.Click(selector, chromedp.ByQuery))
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		err = s.trustedClick(ctx, runtimeSessionID, refState.Selector, input)
 	case "doubleClick":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.DoubleClick(selector, chromedp.ByQuery))
 	case "hover":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(() => {
       const el = document.querySelector(%q);
       if (!el) throw new Error("missing");
@@ -364,16 +402,56 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
       return true;
     })()`, selector), nil))
 	case "type":
-		err = chromedp.Run(ctx, chromedp.SendKeys(selector, input.Text, chromedp.ByQuery))
+		err = s.trustedTextInput(ctx, runtimeSessionID, input)
 	case "fill":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.SetValue(selector, input.Value, chromedp.ByQuery))
 	case "press":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.SendKeys(selector, input.Key, chromedp.ByQuery))
 	case "scrollIntoView":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(() => { const el = document.querySelector(%q); if (!el) throw new Error("missing"); el.scrollIntoView({block:"center", inline:"center"}); return true; })()`, selector), nil))
 	case "select":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(() => { const el = document.querySelector(%q); if (!el) throw new Error("missing"); const values = %s; for (const opt of el.options ?? []) { opt.selected = values.includes(opt.value); } el.dispatchEvent(new Event("input", {bubbles:true})); el.dispatchEvent(new Event("change", {bubbles:true})); return true; })()`, selector, jsStringArray(input.Values)), nil))
 	case "waitFor":
+		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		if refErr != nil {
+			return ActOutput{}, refErr
+		}
+		if err := validateActionRef(input.Action, refState); err != nil {
+			return ActOutput{}, err
+		}
+		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.WaitVisible(selector, chromedp.ByQuery))
 	default:
 		return ActOutput{}, ErrInvalidRequest
@@ -406,6 +484,145 @@ func validateActionRef(action string, ref browserrt.RefState) error {
 	default:
 		return ErrInvalidRequest
 	}
+}
+
+func (s *Service) trustedTextInput(ctx context.Context, runtimeSessionID string, input ActInput) error {
+	if strings.TrimSpace(input.Text) == "" {
+		return ErrInvalidRequest
+	}
+	if input.Ref == "" {
+		return ErrInvalidRequest
+	}
+	target, err := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
+	if err != nil {
+		return err
+	}
+	if err := s.trustedClickTarget(ctx, runtimeSessionID, target, input); err != nil {
+		return err
+	}
+	var editable bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(`(() => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = (el.tagName || "").toLowerCase();
+      return !!(el.isContentEditable || tag === "textarea" || (tag === "input" && !["button","checkbox","file","hidden","image","radio","range","reset","submit"].includes((el.type || "").toLowerCase())));
+    })()`, &editable)); err != nil {
+		return err
+	}
+	if !editable {
+		return ErrInvalidRequest
+	}
+	actions := []chromedp.Action{}
+	if input.Clear {
+		actions = append(actions,
+			chromedp.KeyEvent("a", chromedp.KeyModifiers(cdinput.ModifierCtrl)),
+			chromedp.KeyEvent(kb.Backspace),
+		)
+	}
+	actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
+		return cdinput.InsertText(input.Text).Do(ctx)
+	}))
+	return chromedp.Run(ctx, actions...)
+}
+
+func (s *Service) trustedClick(ctx context.Context, runtimeSessionID string, selector string, input ActInput) error {
+	target, err := queryTargetBySelector(ctx, selector, false)
+	if err != nil {
+		return err
+	}
+	return s.trustedClickTarget(ctx, runtimeSessionID, target, input)
+}
+
+func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) error {
+	viewport := viewportRect{Width: 1366, Height: 768}
+	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
+	start := s.pointerStart(runtimeSessionID, viewport)
+	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile)
+	button := cdinput.Left
+	switch input.Button {
+	case "right":
+		button = cdinput.Right
+	case "middle":
+		button = cdinput.Middle
+	}
+	clickCount := int64(input.ClickCount)
+	if clickCount <= 0 {
+		clickCount = 1
+	}
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		for _, point := range path {
+			if err := cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx); err != nil {
+				return err
+			}
+		}
+		end := path[len(path)-1]
+		if err := cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
+			return err
+		}
+		return cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx)
+	})); err != nil {
+		return err
+	}
+	s.setPointer(runtimeSessionID, path[len(path)-1])
+	return nil
+}
+
+func (s *Service) resolveActRef(ctx context.Context, runtimeSessionID string, ref string) (browserTarget, error) {
+	if ref == "" {
+		return browserTarget{}, ErrInvalidRequest
+	}
+	refState, err := s.state.GetRef(runtimeSessionID, ref)
+	if err != nil {
+		return browserTarget{}, err
+	}
+	if refState.Kind != "element" {
+		return browserTarget{}, browserrt.ErrInvalidRef
+	}
+	return queryTargetBySelector(ctx, refState.Selector, false)
+}
+
+func queryTargetBySelector(ctx context.Context, selector string, requireUnique bool) (browserTarget, error) {
+	var out browserTarget
+	script := fmt.Sprintf(`(() => {
+      const selector = %q;
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const matches = Array.from(document.querySelectorAll(selector)).filter(visible);
+      if (%t && matches.length !== 1) throw new Error("target ambiguous");
+      const el = matches[0] || document.querySelector(selector);
+      if (!el) throw new Error("missing");
+      el.scrollIntoView({block:"center", inline:"center"});
+      const r = el.getBoundingClientRect();
+      const tag = (el.tagName || "").toLowerCase();
+      return {
+        selector,
+        rect: { x: r.left, y: r.top, width: r.width, height: r.height },
+        editable: !!(el.isContentEditable || tag === "textarea" || (tag === "input" && !["button","checkbox","file","hidden","image","radio","range","reset","submit"].includes((el.type || "").toLowerCase())))
+      };
+    })()`, selector, requireUnique)
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &out)); err != nil {
+		return browserTarget{}, err
+	}
+	return out, nil
+}
+
+func (s *Service) pointerStart(runtimeSessionID string, viewport viewportRect) pointerPoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.pointers[runtimeSessionID]
+	if ok && state.Initialized {
+		return clampPoint(state.Point, viewport)
+	}
+	return pointerPoint{X: viewport.Width * 0.35, Y: viewport.Height * 0.35}
+}
+
+func (s *Service) setPointer(runtimeSessionID string, point pointerPoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pointers[runtimeSessionID] = pointerState{Point: point, Initialized: true}
 }
 
 func pageGroupsToState(groups map[string]PageTable) map[string]any {
@@ -574,7 +791,7 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	var chromeEnv []string
 	if liveEnabled {
 		var err error
-		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir))
+		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir), int(fp.ViewportWidth), int(fp.ViewportHeight))
 		if err != nil {
 			return nil, err
 		}

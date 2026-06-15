@@ -74,6 +74,24 @@ func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, content
 	return f.err
 }
 
+func TestActType_RequiresRef(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{
+		Sessions: session.NewManager(session.ManagerOptions{
+			Store:      profile.NewMemoryStore(),
+			Workdir:    t.TempDir(),
+			CDPBaseURL: "ws://browserd:9222/devtools/browser",
+		}),
+		State: browserrt.NewState(),
+	})
+
+	_, err := svc.Act("rt_1", ActInput{Action: "type", Text: "hello"})
+
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request for missing type ref, got %v", err)
+	}
+
+}
+
 func TestBuildChromeArgs_IncludesNoSandboxAndProfileDir(t *testing.T) {
 	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: true})
 

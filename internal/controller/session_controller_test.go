@@ -29,6 +29,7 @@ type fakeBrowserRuntime struct {
 	navigateErr   error
 	snapshotOut   browser.SnapshotOutput
 	snapshotErr   error
+	actCalls      []browser.ActInput
 	actOut        browser.ActOutput
 	actErr        error
 	screenshotOut browser.ScreenshotOutput
@@ -72,7 +73,8 @@ func (f *fakeBrowserRuntime) Snapshot(_ string, _ browser.SnapshotInput) (browse
 	return f.snapshotOut, f.snapshotErr
 }
 
-func (f *fakeBrowserRuntime) Act(_ string, _ browser.ActInput) (browser.ActOutput, error) {
+func (f *fakeBrowserRuntime) Act(_ string, input browser.ActInput) (browser.ActOutput, error) {
+	f.actCalls = append(f.actCalls, input)
 	return f.actOut, f.actErr
 }
 
@@ -109,6 +111,61 @@ func (f *fakeSessionManager) Delete(runtimeSessionID string) error {
 
 func (f *fakeSessionManager) Get(_ string) (session.SessionInfo, error) {
 	return session.SessionInfo{}, session.ErrSessionNotFound
+}
+
+func TestAct_ForwardsTrustedInputFields(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+		"action":"type",
+		"ref":"e8",
+		"text":"你好",
+		"clear":true,
+		"motionProfile":"humanized",
+		"timeoutMs":5000
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 1 {
+		t.Fatalf("expected one act call, got %+v", browserRuntime.actCalls)
+	}
+	call := browserRuntime.actCalls[0]
+	if call.Action != "type" || call.Text != "你好" || !call.Clear || call.MotionProfile != "humanized" || call.TimeoutMs != 5000 {
+		t.Fatalf("unexpected act call: %+v", call)
+	}
+	if call.Ref != "e8" {
+		t.Fatalf("expected ref target, got %+v", call)
+	}
+}
+
+func TestAct_RejectsTargetField(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+		"action":"type",
+		"ref":"e8",
+		"target":{"ref":"e8"},
+		"text":"你好"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 0 {
+		t.Fatalf("expected target request to fail before browser runtime, got %+v", browserRuntime.actCalls)
+	}
 }
 
 func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {

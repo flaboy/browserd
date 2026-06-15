@@ -9,7 +9,7 @@ import (
 )
 
 func TestLiveRuntimePlanAllocatesDisplayAndPorts(t *testing.T) {
-	plan, err := NewLiveRuntimePlan("/tmp/session")
+	plan, err := NewLiveRuntimePlan("/tmp/session", 1920, 1080)
 	if err != nil {
 		t.Fatalf("new live runtime plan: %v", err)
 	}
@@ -25,6 +25,9 @@ func TestLiveRuntimePlanAllocatesDisplayAndPorts(t *testing.T) {
 	if plan.VNCPort == plan.WebsockifyPort {
 		t.Fatalf("ports must be unique: %+v", plan)
 	}
+	if plan.ScreenWidth != 1920 || plan.ScreenHeight != 1080 {
+		t.Fatalf("expected configured screen size, got %+v", plan)
+	}
 }
 
 func TestLiveRuntimeCommandsUseSessionDisplay(t *testing.T) {
@@ -33,6 +36,8 @@ func TestLiveRuntimeCommandsUseSessionDisplay(t *testing.T) {
 		VNCPort:        5901,
 		WebsockifyPort: 6081,
 		NoVNCWebRoot:   "/usr/share/novnc",
+		ScreenWidth:    1920,
+		ScreenHeight:   1080,
 	}
 	commands := plan.Commands()
 	if len(commands) != 4 {
@@ -49,6 +54,38 @@ func TestLiveRuntimeCommandsUseSessionDisplay(t *testing.T) {
 	}
 	if commands[2].Args[1] != ":99" {
 		t.Fatalf("expected x11vnc to use display, got %+v", commands[2])
+	}
+}
+
+func TestLiveRuntimeCommandsUseConfiguredScreenSize(t *testing.T) {
+	plan := LiveRuntimePlan{
+		Display:        ":99",
+		VNCPort:        5901,
+		WebsockifyPort: 6081,
+		NoVNCWebRoot:   "/usr/share/novnc",
+		ScreenWidth:    1920,
+		ScreenHeight:   1080,
+	}
+
+	commands := plan.Commands()
+
+	if got := commands[0].Args[3]; got != "1920x1080x24" {
+		t.Fatalf("expected Xvfb to use configured screen size, got %q in %+v", got, commands[0])
+	}
+}
+
+func TestLiveRuntimeCommandsUseDefaultScreenSize(t *testing.T) {
+	plan := LiveRuntimePlan{
+		Display:        ":99",
+		VNCPort:        5901,
+		WebsockifyPort: 6081,
+		NoVNCWebRoot:   "/usr/share/novnc",
+	}
+
+	commands := plan.Commands()
+
+	if got := commands[0].Args[3]; got != "1440x1000x24" {
+		t.Fatalf("expected default Xvfb screen size, got %q in %+v", got, commands[0])
 	}
 }
 
