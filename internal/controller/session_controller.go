@@ -127,18 +127,18 @@ type navigateRequest struct {
 }
 
 type actRequest struct {
-	Action        string             `json:"action"`
-	Ref           string             `json:"ref,omitempty"`
-	Target        *browser.ActTarget `json:"target,omitempty"`
-	Text          string             `json:"text,omitempty"`
-	Key           string             `json:"key,omitempty"`
-	Value         string             `json:"value,omitempty"`
-	Values        []string           `json:"values,omitempty"`
-	Clear         bool               `json:"clear,omitempty"`
-	Button        string             `json:"button,omitempty"`
-	ClickCount    int                `json:"clickCount,omitempty"`
-	MotionProfile string             `json:"motionProfile,omitempty"`
-	TimeoutMs     int                `json:"timeoutMs,omitempty"`
+	Action        string          `json:"action"`
+	Ref           string          `json:"ref,omitempty"`
+	Target        json.RawMessage `json:"target,omitempty"`
+	Text          string          `json:"text,omitempty"`
+	Key           string          `json:"key,omitempty"`
+	Value         string          `json:"value,omitempty"`
+	Values        []string        `json:"values,omitempty"`
+	Clear         bool            `json:"clear,omitempty"`
+	Button        string          `json:"button,omitempty"`
+	ClickCount    int             `json:"clickCount,omitempty"`
+	MotionProfile string          `json:"motionProfile,omitempty"`
+	TimeoutMs     int             `json:"timeoutMs,omitempty"`
 }
 
 type screenshotRequest struct {
@@ -333,10 +333,13 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
+	if len(req.Target) > 0 {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "browser act only supports top-level ref; call snapshot first and pass ref")
+		return
+	}
 	out, err := h.browser.Act(runtimeSessionID, browser.ActInput{
 		Action:        req.Action,
 		Ref:           req.Ref,
-		Target:        req.Target,
 		Text:          req.Text,
 		Key:           req.Key,
 		Value:         req.Value,

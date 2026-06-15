@@ -162,7 +162,7 @@ Content-Type: application/json
 约束：
 - `click` / `fill` / `press` / `hover` / `select` / `waitFor` 只接受 `e*`
 - `click` 通过 CDP mouse events 执行，默认 `motionProfile=humanized` 会先生成 mousemove 轨迹再 press/release
-- `type` 必须显式指定 `ref` 或 `target`，先聚焦目标，再通过 CDP `Input.insertText` 插入文本；不依赖当前焦点
+- `type` 必须显式指定 `ref`，先聚焦目标，再通过 CDP `Input.insertText` 插入文本；不依赖当前焦点
 - `scrollIntoView` 接受 `e*` 与 `t*`
 - 对 `t*` 执行 `click` 会返回 `INVALID_REF`
 

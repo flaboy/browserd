@@ -22,6 +22,8 @@ type LiveRuntimePlan struct {
 	VNCPort        int
 	WebsockifyPort int
 	NoVNCWebRoot   string
+	ScreenWidth    int
+	ScreenHeight   int
 }
 
 type LiveCommand struct {
@@ -49,7 +51,7 @@ type tailBuffer struct {
 	buf   bytes.Buffer
 }
 
-func NewLiveRuntimePlan(sessionRoot string) (LiveRuntimePlan, error) {
+func NewLiveRuntimePlan(sessionRoot string, screenWidth int, screenHeight int) (LiveRuntimePlan, error) {
 	vncPort, err := freeTCPPort()
 	if err != nil {
 		return LiveRuntimePlan{}, err
@@ -60,16 +62,24 @@ func NewLiveRuntimePlan(sessionRoot string) (LiveRuntimePlan, error) {
 	}
 	displayNumber := (vncPort % 1000) + 100
 	_ = sessionRoot
+	if screenWidth <= 0 {
+		screenWidth = 1440
+	}
+	if screenHeight <= 0 {
+		screenHeight = 1000
+	}
 	return LiveRuntimePlan{
 		Display:        ":" + strconv.Itoa(displayNumber),
 		VNCPort:        vncPort,
 		WebsockifyPort: websockifyPort,
 		NoVNCWebRoot:   "/usr/share/novnc",
+		ScreenWidth:    screenWidth,
+		ScreenHeight:   screenHeight,
 	}, nil
 }
 
-func NewLiveRuntime(sessionRoot string) (*LiveRuntime, error) {
-	plan, err := NewLiveRuntimePlan(sessionRoot)
+func NewLiveRuntime(sessionRoot string, screenWidth int, screenHeight int) (*LiveRuntime, error) {
+	plan, err := NewLiveRuntimePlan(sessionRoot, screenWidth, screenHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +90,7 @@ func (p LiveRuntimePlan) Commands() []LiveCommand {
 	return []LiveCommand{
 		{
 			Name: "Xvfb",
-			Args: []string{p.Display, "-screen", "0", "1440x1000x24", "-nolisten", "tcp"},
+			Args: []string{p.Display, "-screen", "0", fmt.Sprintf("%dx%dx24", p.screenWidth(), p.screenHeight()), "-nolisten", "tcp"},
 		},
 		{
 			Name: "openbox",
@@ -95,6 +105,20 @@ func (p LiveRuntimePlan) Commands() []LiveCommand {
 			Args: []string{"--web", p.NoVNCWebRoot, strconv.Itoa(p.WebsockifyPort), "127.0.0.1:" + strconv.Itoa(p.VNCPort)},
 		},
 	}
+}
+
+func (p LiveRuntimePlan) screenWidth() int {
+	if p.ScreenWidth <= 0 {
+		return 1440
+	}
+	return p.ScreenWidth
+}
+
+func (p LiveRuntimePlan) screenHeight() int {
+	if p.ScreenHeight <= 0 {
+		return 1000
+	}
+	return p.ScreenHeight
 }
 
 func (r *LiveRuntime) Start(ctx context.Context) error {

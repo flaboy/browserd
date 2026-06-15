@@ -75,30 +75,17 @@ type SnapshotOutput struct {
 }
 
 type ActInput struct {
-	Action        string     `json:"action"`
-	Ref           string     `json:"ref,omitempty"`
-	Target        *ActTarget `json:"target,omitempty"`
-	Text          string     `json:"text,omitempty"`
-	Key           string     `json:"key,omitempty"`
-	Value         string     `json:"value,omitempty"`
-	Values        []string   `json:"values,omitempty"`
-	Clear         bool       `json:"clear,omitempty"`
-	Button        string     `json:"button,omitempty"`
-	ClickCount    int        `json:"clickCount,omitempty"`
-	MotionProfile string     `json:"motionProfile,omitempty"`
-	TimeoutMs     int        `json:"timeoutMs,omitempty"`
-}
-
-type ActTarget struct {
-	Ref      string    `json:"ref,omitempty"`
-	Selector string    `json:"selector,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	Point    *ActPoint `json:"point,omitempty"`
-}
-
-type ActPoint struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
+	Action        string   `json:"action"`
+	Ref           string   `json:"ref,omitempty"`
+	Text          string   `json:"text,omitempty"`
+	Key           string   `json:"key,omitempty"`
+	Value         string   `json:"value,omitempty"`
+	Values        []string `json:"values,omitempty"`
+	Clear         bool     `json:"clear,omitempty"`
+	Button        string   `json:"button,omitempty"`
+	ClickCount    int      `json:"clickCount,omitempty"`
+	MotionProfile string   `json:"motionProfile,omitempty"`
+	TimeoutMs     int      `json:"timeoutMs,omitempty"`
 }
 
 type ActOutput struct {
@@ -369,7 +356,7 @@ func (s *Service) Snapshot(runtimeSessionID string, input SnapshotInput) (Snapsh
 }
 
 func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error) {
-	if input.Action == "type" && input.Ref == "" && input.Target == nil {
+	if input.Action == "type" && input.Ref == "" {
 		return ActOutput{}, ErrInvalidRequest
 	}
 	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, input.TimeoutMs)
@@ -503,10 +490,10 @@ func (s *Service) trustedTextInput(ctx context.Context, runtimeSessionID string,
 	if strings.TrimSpace(input.Text) == "" {
 		return ErrInvalidRequest
 	}
-	if input.Ref != "" && input.Target != nil {
+	if input.Ref == "" {
 		return ErrInvalidRequest
 	}
-	target, err := s.resolveActTarget(ctx, runtimeSessionID, input.Ref, input.Target)
+	target, err := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
 	if err != nil {
 		return err
 	}
@@ -580,49 +567,18 @@ func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID strin
 	return nil
 }
 
-func (s *Service) resolveActTarget(ctx context.Context, runtimeSessionID string, ref string, target *ActTarget) (browserTarget, error) {
-	if ref != "" {
-		refState, err := s.state.GetRef(runtimeSessionID, ref)
-		if err != nil {
-			return browserTarget{}, err
-		}
-		if refState.Kind != "element" {
-			return browserTarget{}, browserrt.ErrInvalidRef
-		}
-		return queryTargetBySelector(ctx, refState.Selector, false)
-	}
-	if target == nil {
+func (s *Service) resolveActRef(ctx context.Context, runtimeSessionID string, ref string) (browserTarget, error) {
+	if ref == "" {
 		return browserTarget{}, ErrInvalidRequest
 	}
-	locators := 0
-	if target.Ref != "" {
-		locators++
+	refState, err := s.state.GetRef(runtimeSessionID, ref)
+	if err != nil {
+		return browserTarget{}, err
 	}
-	if target.Selector != "" {
-		locators++
+	if refState.Kind != "element" {
+		return browserTarget{}, browserrt.ErrInvalidRef
 	}
-	if target.Text != "" {
-		locators++
-	}
-	if target.Point != nil {
-		locators++
-	}
-	if locators != 1 {
-		return browserTarget{}, ErrInvalidRequest
-	}
-	switch {
-	case target.Ref != "":
-		return s.resolveActTarget(ctx, runtimeSessionID, target.Ref, nil)
-	case target.Selector != "":
-		return queryTargetBySelector(ctx, target.Selector, true)
-	case target.Text != "":
-		return queryTargetByText(ctx, target.Text)
-	case target.Point != nil:
-		rect := targetRect{X: target.Point.X, Y: target.Point.Y, Width: 1, Height: 1}
-		return browserTarget{Rect: rect}, nil
-	default:
-		return browserTarget{}, ErrInvalidRequest
-	}
+	return queryTargetBySelector(ctx, refState.Selector, false)
 }
 
 func queryTargetBySelector(ctx context.Context, selector string, requireUnique bool) (browserTarget, error) {
@@ -647,28 +603,6 @@ func queryTargetBySelector(ctx context.Context, selector string, requireUnique b
         editable: !!(el.isContentEditable || tag === "textarea" || (tag === "input" && !["button","checkbox","file","hidden","image","radio","range","reset","submit"].includes((el.type || "").toLowerCase())))
       };
     })()`, selector, requireUnique)
-	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &out)); err != nil {
-		return browserTarget{}, err
-	}
-	return out, nil
-}
-
-func queryTargetByText(ctx context.Context, text string) (browserTarget, error) {
-	var out browserTarget
-	script := fmt.Sprintf(`(() => {
-      const text = %q;
-      const visible = (el) => {
-        const r = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-      };
-      const matches = Array.from(document.querySelectorAll("body *")).filter(el => visible(el) && (el.innerText || el.textContent || "").trim() === text);
-      if (matches.length !== 1) throw new Error("target ambiguous");
-      const el = matches[0];
-      el.scrollIntoView({block:"center", inline:"center"});
-      const r = el.getBoundingClientRect();
-      return { selector: "", rect: { x: r.left, y: r.top, width: r.width, height: r.height }, editable: !!el.isContentEditable };
-    })()`, text)
 	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &out)); err != nil {
 		return browserTarget{}, err
 	}
@@ -857,7 +791,7 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	var chromeEnv []string
 	if liveEnabled {
 		var err error
-		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir))
+		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir), int(fp.ViewportWidth), int(fp.ViewportHeight))
 		if err != nil {
 			return nil, err
 		}

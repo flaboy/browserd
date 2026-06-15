@@ -119,7 +119,7 @@ func TestAct_ForwardsTrustedInputFields(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
 		"action":"type",
-		"target":{"selector":"[contenteditable=true]"},
+		"ref":"e8",
 		"text":"你好",
 		"clear":true,
 		"motionProfile":"humanized",
@@ -140,8 +140,31 @@ func TestAct_ForwardsTrustedInputFields(t *testing.T) {
 	if call.Action != "type" || call.Text != "你好" || !call.Clear || call.MotionProfile != "humanized" || call.TimeoutMs != 5000 {
 		t.Fatalf("unexpected act call: %+v", call)
 	}
-	if call.Target == nil || call.Target.Selector != "[contenteditable=true]" {
-		t.Fatalf("expected selector target, got %+v", call.Target)
+	if call.Ref != "e8" {
+		t.Fatalf("expected ref target, got %+v", call)
+	}
+}
+
+func TestAct_RejectsTargetField(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+		"action":"type",
+		"ref":"e8",
+		"target":{"ref":"e8"},
+		"text":"你好"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 0 {
+		t.Fatalf("expected target request to fail before browser runtime, got %+v", browserRuntime.actCalls)
 	}
 }
 

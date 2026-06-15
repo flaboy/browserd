@@ -74,7 +74,7 @@ func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, content
 	return f.err
 }
 
-func TestActType_RequiresExplicitTarget(t *testing.T) {
+func TestActType_RequiresRef(t *testing.T) {
 	svc := NewServiceWithOptions(ServiceOptions{
 		Sessions: session.NewManager(session.ManagerOptions{
 			Store:      profile.NewMemoryStore(),
@@ -87,18 +87,9 @@ func TestActType_RequiresExplicitTarget(t *testing.T) {
 	_, err := svc.Act("rt_1", ActInput{Action: "type", Text: "hello"})
 
 	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("expected invalid request for missing type target, got %v", err)
+		t.Fatalf("expected invalid request for missing type ref, got %v", err)
 	}
-}
 
-func TestResolveActTarget_RejectsMultipleLocators(t *testing.T) {
-	svc := NewServiceWithOptions(ServiceOptions{State: browserrt.NewState()})
-
-	_, err := svc.resolveActTarget(context.Background(), "rt_1", "", &ActTarget{Ref: "e1", Selector: "input"})
-
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("expected invalid request for multiple target locators, got %v", err)
-	}
 }
 
 func TestBuildChromeArgs_IncludesNoSandboxAndProfileDir(t *testing.T) {
