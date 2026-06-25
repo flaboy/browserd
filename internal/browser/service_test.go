@@ -152,6 +152,10 @@ func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
 		t.Fatalf("parse proxy: %v", err)
 	}
 	fp := FingerprintFromSeed("fp_seed_1")
+	fp.ScreenWidth = 1920
+	fp.ScreenHeight = 1080
+	fp.ViewportWidth = 1366
+	fp.ViewportHeight = 768
 	args := buildChromeArgs(BrowserOptions{
 		UserDataDir: "/tmp/profile",
 		Headless:    true,
@@ -161,7 +165,7 @@ func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
 
 	want := []string{
 		"--proxy-server=http://proxy.example.com:8080",
-		fmt.Sprintf("--window-size=%d,%d", fp.ViewportWidth, fp.ViewportHeight),
+		fmt.Sprintf("--window-size=%d,%d", fp.ScreenWidth, fp.ScreenHeight),
 		"--lang=" + fp.Locale,
 		"--user-agent=" + fp.UserAgent,
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -178,10 +182,29 @@ func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
 			t.Fatalf("expected arg %q in %+v", expected, args)
 		}
 	}
+	if containsArg(args, fmt.Sprintf("--window-size=%d,%d", fp.ViewportWidth, fp.ViewportHeight)) {
+		t.Fatalf("expected chrome window size to use screen dimensions, got viewport size in %+v", args)
+	}
 	for _, arg := range args {
 		if strings.Contains(arg, "user:pass") {
 			t.Fatalf("proxy credentials must not be placed in chrome args: %+v", args)
 		}
+	}
+}
+
+func TestEnsureBrowserUsesFingerprintScreenSizeForLiveRuntime(t *testing.T) {
+	fp := FingerprintFromSeed("fp_seed_1")
+	fp.ScreenWidth = 1920
+	fp.ScreenHeight = 1080
+	fp.ViewportWidth = 1366
+	fp.ViewportHeight = 768
+
+	width, height, err := liveRuntimeDimensionsFromFingerprint(fp)
+	if err != nil {
+		t.Fatalf("live runtime dimensions: %v", err)
+	}
+	if width != 1920 || height != 1080 {
+		t.Fatalf("expected live runtime to use screen size 1920x1080, got %dx%d", width, height)
 	}
 }
 

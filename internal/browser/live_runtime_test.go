@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+func TestLiveRuntimeCommandsUseConfiguredScreenSize(t *testing.T) {
+	plan, err := NewLiveRuntimePlan("/tmp/session", 1920, 1080)
+	if err != nil {
+		t.Fatalf("new live runtime plan: %v", err)
+	}
+	commands := plan.Commands()
+	if got := commands[0].Args[3]; got != "1920x1080x24" {
+		t.Fatalf("expected Xvfb to use configured screen size, got %q in %+v", got, commands[0])
+	}
+}
+
+func TestLiveRuntimePlanRejectsMissingScreenSize(t *testing.T) {
+	_, err := NewLiveRuntimePlan("/tmp/session", 0, 1080)
+	if err == nil {
+		t.Fatal("expected missing screen size to fail")
+	}
+	_, err = NewLiveRuntimePlan("/tmp/session", 1920, 0)
+	if err == nil {
+		t.Fatal("expected missing screen size to fail")
+	}
+}
+
 func TestLiveRuntimePlanAllocatesDisplayAndPorts(t *testing.T) {
 	plan, err := NewLiveRuntimePlan("/tmp/session", 1920, 1080)
 	if err != nil {
@@ -57,38 +79,6 @@ func TestLiveRuntimeCommandsUseSessionDisplay(t *testing.T) {
 	}
 }
 
-func TestLiveRuntimeCommandsUseConfiguredScreenSize(t *testing.T) {
-	plan := LiveRuntimePlan{
-		Display:        ":99",
-		VNCPort:        5901,
-		WebsockifyPort: 6081,
-		NoVNCWebRoot:   "/usr/share/novnc",
-		ScreenWidth:    1920,
-		ScreenHeight:   1080,
-	}
-
-	commands := plan.Commands()
-
-	if got := commands[0].Args[3]; got != "1920x1080x24" {
-		t.Fatalf("expected Xvfb to use configured screen size, got %q in %+v", got, commands[0])
-	}
-}
-
-func TestLiveRuntimeCommandsUseDefaultScreenSize(t *testing.T) {
-	plan := LiveRuntimePlan{
-		Display:        ":99",
-		VNCPort:        5901,
-		WebsockifyPort: 6081,
-		NoVNCWebRoot:   "/usr/share/novnc",
-	}
-
-	commands := plan.Commands()
-
-	if got := commands[0].Args[3]; got != "1440x1000x24" {
-		t.Fatalf("expected default Xvfb screen size, got %q in %+v", got, commands[0])
-	}
-}
-
 func TestLiveRuntimeHealthFailsWhenVNCIsNotListening(t *testing.T) {
 	vncPort := freePortForTest(t)
 	websockifyPort := freePortForTest(t)
@@ -98,6 +88,8 @@ func TestLiveRuntimeHealthFailsWhenVNCIsNotListening(t *testing.T) {
 			VNCPort:        vncPort,
 			WebsockifyPort: websockifyPort,
 			NoVNCWebRoot:   "/usr/share/novnc",
+			ScreenWidth:    1920,
+			ScreenHeight:   1080,
 		},
 	}
 
@@ -125,6 +117,8 @@ func TestLiveRuntimeHealthFailsWhenWebsockifyIsNotListening(t *testing.T) {
 			VNCPort:        vncPort,
 			WebsockifyPort: freePortForTest(t),
 			NoVNCWebRoot:   "/usr/share/novnc",
+			ScreenWidth:    1920,
+			ScreenHeight:   1080,
 		},
 	}
 

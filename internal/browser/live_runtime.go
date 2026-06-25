@@ -52,6 +52,9 @@ type tailBuffer struct {
 }
 
 func NewLiveRuntimePlan(sessionRoot string, screenWidth int, screenHeight int) (LiveRuntimePlan, error) {
+	if screenWidth <= 0 || screenHeight <= 0 {
+		return LiveRuntimePlan{}, fmt.Errorf("invalid live runtime screen size: %dx%d", screenWidth, screenHeight)
+	}
 	vncPort, err := freeTCPPort()
 	if err != nil {
 		return LiveRuntimePlan{}, err
@@ -62,12 +65,6 @@ func NewLiveRuntimePlan(sessionRoot string, screenWidth int, screenHeight int) (
 	}
 	displayNumber := (vncPort % 1000) + 100
 	_ = sessionRoot
-	if screenWidth <= 0 {
-		screenWidth = 1440
-	}
-	if screenHeight <= 0 {
-		screenHeight = 1000
-	}
 	return LiveRuntimePlan{
 		Display:        ":" + strconv.Itoa(displayNumber),
 		VNCPort:        vncPort,
@@ -90,7 +87,7 @@ func (p LiveRuntimePlan) Commands() []LiveCommand {
 	return []LiveCommand{
 		{
 			Name: "Xvfb",
-			Args: []string{p.Display, "-screen", "0", fmt.Sprintf("%dx%dx24", p.screenWidth(), p.screenHeight()), "-nolisten", "tcp"},
+			Args: []string{p.Display, "-screen", "0", fmt.Sprintf("%dx%dx24", p.ScreenWidth, p.ScreenHeight), "-nolisten", "tcp"},
 		},
 		{
 			Name: "openbox",
@@ -105,20 +102,6 @@ func (p LiveRuntimePlan) Commands() []LiveCommand {
 			Args: []string{"--web", p.NoVNCWebRoot, strconv.Itoa(p.WebsockifyPort), "127.0.0.1:" + strconv.Itoa(p.VNCPort)},
 		},
 	}
-}
-
-func (p LiveRuntimePlan) screenWidth() int {
-	if p.ScreenWidth <= 0 {
-		return 1440
-	}
-	return p.ScreenWidth
-}
-
-func (p LiveRuntimePlan) screenHeight() int {
-	if p.ScreenHeight <= 0 {
-		return 1000
-	}
-	return p.ScreenHeight
 }
 
 func (r *LiveRuntime) Start(ctx context.Context) error {

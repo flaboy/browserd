@@ -797,7 +797,11 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	var chromeEnv []string
 	if liveEnabled {
 		var err error
-		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir), int(fp.ViewportWidth), int(fp.ViewportHeight))
+		screenWidth, screenHeight, err := liveRuntimeDimensionsFromFingerprint(fp)
+		if err != nil {
+			return nil, err
+		}
+		liveRuntime, err = NewLiveRuntime(sessionRootFromProfileDir(info.ProfileDir), screenWidth, screenHeight)
 		if err != nil {
 			return nil, err
 		}
@@ -973,8 +977,8 @@ func buildChromeArgs(opts BrowserOptions) []string {
 	if opts.Fingerprint.Locale != "" {
 		args = append(args, "--lang="+opts.Fingerprint.Locale)
 	}
-	if opts.Fingerprint.ViewportWidth > 0 && opts.Fingerprint.ViewportHeight > 0 {
-		args = append(args, fmt.Sprintf("--window-size=%d,%d", opts.Fingerprint.ViewportWidth, opts.Fingerprint.ViewportHeight))
+	if opts.Fingerprint.ScreenWidth > 0 && opts.Fingerprint.ScreenHeight > 0 {
+		args = append(args, fmt.Sprintf("--window-size=%d,%d", opts.Fingerprint.ScreenWidth, opts.Fingerprint.ScreenHeight))
 	}
 	if opts.Headless {
 		args = append(args, "--headless=new")
@@ -999,4 +1003,11 @@ func (s *Service) proxyHopMode(proxy ProxyConfig) (bool, error) {
 func liveModeEnabled() bool {
 	value := strings.TrimSpace(os.Getenv("BROWSERD_LIVE_ENABLED"))
 	return strings.EqualFold(value, "true") || value == "1"
+}
+
+func liveRuntimeDimensionsFromFingerprint(fp FingerprintConfig) (int, int, error) {
+	if fp.ScreenWidth <= 0 || fp.ScreenHeight <= 0 {
+		return 0, 0, fmt.Errorf("%w: fingerprint screenWidth/screenHeight are required for live runtime, got %dx%d", ErrInvalidRequest, fp.ScreenWidth, fp.ScreenHeight)
+	}
+	return int(fp.ScreenWidth), int(fp.ScreenHeight), nil
 }
