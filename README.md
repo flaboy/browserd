@@ -159,10 +159,32 @@ Content-Type: application/json
 }
 ```
 
+输入并提交（一次调用完成）：
+
+```http
+POST /v1/sessions/{runtimeSessionId}/act
+Content-Type: application/json
+
+{
+  "action": "type",
+  "ref": "e1",
+  "text": "复旦附中",
+  "clear": true,
+  "submit": true
+}
+```
+
 约束：
 - `click` / `fill` / `press` / `hover` / `select` / `waitFor` 只接受 `e*`
 - `click` 通过 CDP mouse events 执行，默认 `motionProfile=humanized` 会先生成 mousemove 轨迹再 press/release
 - `type` 必须显式指定 `ref`，先聚焦目标，再通过 CDP `Input.insertText` 插入文本；不依赖当前焦点
+- `type` 的 `submit` 为 `true` 时，在同一次 CDP 往返里紧接着按下 Enter。提交表单或触发搜索一律用它，
+  不要用 `type` 后再发一次 `press`——两次 `/act` 之间页面可能重渲染并让 `ref` 失效
+- `type` 的 `text` 不能为空，所以 `submit` 不能当作单独的「按回车」使用；那是 `press` 的职责
+- `press` 的 `key` 只接受以下命名键（W3C `KeyboardEvent.key` 写法，大小写敏感）：
+  `ArrowDown`、`ArrowLeft`、`ArrowRight`、`ArrowUp`、`Backspace`、`Delete`、`End`、`Enter`、`Escape`、`Home`、`PageDown`、`PageUp`、`Space`、`Tab`；
+  或任意单个可打印字符，例如 `"a"`、`"/"`
+- `press` 不接受别名（`Return`、`esc`、`up`）和修饰键组合（`Control+s`）；非法 `key` 返回 `INVALID_KEY`，错误信息会给出正确写法，不会把 `key` 当作文本输入
 - `scrollIntoView` 接受 `e*` 与 `t*`
 - 对 `t*` 执行 `click` 会返回 `INVALID_REF`
 

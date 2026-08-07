@@ -596,6 +596,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusConflict, "STALE_REF", err.Error())
 	case errors.Is(err, runtime.ErrInvalidRef):
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REF", err.Error())
+	case errors.Is(err, browser.ErrInvalidKey):
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_KEY", err.Error())
 	case errors.Is(err, browser.ErrInvalidRequest):
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, browser.ErrPlaywrightUnavailable):

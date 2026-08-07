@@ -20,11 +20,11 @@ import (
 	cdinput "github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
-	"github.com/chromedp/chromedp/kb"
 )
 
 var (
 	ErrInvalidRequest        = errors.New("invalid request")
+	ErrInvalidKey            = errors.New("invalid key")
 	ErrNavigationFailed      = errors.New("navigation failed")
 	ErrActionFailed          = errors.New("action failed")
 	ErrEvaluateFailed        = errors.New("evaluate failed")
@@ -82,6 +82,7 @@ type ActInput struct {
 	Value         string   `json:"value,omitempty"`
 	Values        []string `json:"values,omitempty"`
 	Clear         bool     `json:"clear,omitempty"`
+	Submit        bool     `json:"submit,omitempty"`
 	Button        string   `json:"button,omitempty"`
 	ClickCount    int      `json:"clickCount,omitempty"`
 	MotionProfile string   `json:"motionProfile,omitempty"`
@@ -421,8 +422,12 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 		if err := validateActionRef(input.Action, refState); err != nil {
 			return ActOutput{}, err
 		}
+		encodedKey, keyErr := normalizePressKey(input.Key)
+		if keyErr != nil {
+			return ActOutput{}, keyErr
+		}
 		selector := refState.Selector
-		err = chromedp.Run(ctx, chromedp.SendKeys(selector, input.Key, chromedp.ByQuery))
+		err = chromedp.Run(ctx, chromedp.SendKeys(selector, encodedKey, chromedp.ByQuery))
 	case "scrollIntoView":
 		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
 		if refErr != nil {
@@ -512,16 +517,17 @@ func (s *Service) trustedTextInput(ctx context.Context, runtimeSessionID string,
 	if !editable {
 		return ErrInvalidRequest
 	}
-	actions := []chromedp.Action{}
-	if input.Clear {
-		actions = append(actions,
-			chromedp.KeyEvent("a", chromedp.KeyModifiers(cdinput.ModifierCtrl)),
-			chromedp.KeyEvent(kb.Backspace),
-		)
+	before, after := planTextInputKeys(input.Clear, input.Submit)
+	actions := make([]chromedp.Action, 0, len(before)+len(after)+1)
+	for _, key := range before {
+		actions = append(actions, keyEventAction(key))
 	}
 	actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
 		return cdinput.InsertText(input.Text).Do(ctx)
 	}))
+	for _, key := range after {
+		actions = append(actions, keyEventAction(key))
+	}
 	return chromedp.Run(ctx, actions...)
 }
 
