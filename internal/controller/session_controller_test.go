@@ -118,13 +118,14 @@ func TestAct_ForwardsTrustedInputFields(t *testing.T) {
 	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
-		"action":"type",
-		"ref":"e8",
-		"text":"你好",
-		"clear":true,
-		"motionProfile":"humanized",
-		"timeoutMs":5000
-	}`)))
+			"action":"type",
+			"ref":"e8",
+			"text":"你好",
+			"clear":true,
+			"submit":true,
+			"motionProfile":"humanized",
+			"timeoutMs":5000
+		}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -139,6 +140,9 @@ func TestAct_ForwardsTrustedInputFields(t *testing.T) {
 	call := browserRuntime.actCalls[0]
 	if call.Action != "type" || call.Text != "你好" || !call.Clear || call.MotionProfile != "humanized" || call.TimeoutMs != 5000 {
 		t.Fatalf("unexpected act call: %+v", call)
+	}
+	if !call.Submit {
+		t.Fatalf("expected submit to be forwarded, got %+v", call)
 	}
 	if call.Ref != "e8" {
 		t.Fatalf("expected ref target, got %+v", call)

@@ -135,6 +135,7 @@ type actRequest struct {
 	Value         string          `json:"value,omitempty"`
 	Values        []string        `json:"values,omitempty"`
 	Clear         bool            `json:"clear,omitempty"`
+	Submit        bool            `json:"submit,omitempty"`
 	Button        string          `json:"button,omitempty"`
 	ClickCount    int             `json:"clickCount,omitempty"`
 	MotionProfile string          `json:"motionProfile,omitempty"`
@@ -345,6 +346,7 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		Value:         req.Value,
 		Values:        req.Values,
 		Clear:         req.Clear,
+		Submit:        req.Submit,
 		Button:        req.Button,
 		ClickCount:    req.ClickCount,
 		MotionProfile: req.MotionProfile,
