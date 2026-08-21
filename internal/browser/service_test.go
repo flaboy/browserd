@@ -18,6 +18,8 @@ import (
 
 type fakeAssetStore struct {
 	puts []fakeAssetPut
+	gets []string
+	get  fakeAssetGet
 	err  error
 }
 
@@ -25,6 +27,36 @@ type fakeAssetPut struct {
 	URI         string
 	Body        []byte
 	ContentType string
+}
+
+type fakeAssetGet struct {
+	Body        []byte
+	ContentType string
+	Err         error
+}
+
+type fakeUploadSessionManager struct {
+	info session.SessionInfo
+	err  error
+}
+
+func (f fakeUploadSessionManager) Create(session.CreateInput) (session.CreateOutput, error) {
+	return session.CreateOutput{}, errors.New("not implemented")
+}
+
+func (f fakeUploadSessionManager) Commit(string, session.CommitInput) (session.CommitOutput, error) {
+	return session.CommitOutput{}, errors.New("not implemented")
+}
+
+func (f fakeUploadSessionManager) Delete(string) error {
+	return errors.New("not implemented")
+}
+
+func (f fakeUploadSessionManager) Get(string) (session.SessionInfo, error) {
+	if f.err != nil {
+		return session.SessionInfo{}, f.err
+	}
+	return f.info, nil
 }
 
 func TestNewService_AcceptsProxyHopOptions(t *testing.T) {
@@ -72,6 +104,14 @@ func TestServiceProxyHopMode_RequiresCompleteWorkerConfig(t *testing.T) {
 func (f *fakeAssetStore) Put(_ context.Context, uri string, body []byte, contentType string) error {
 	f.puts = append(f.puts, fakeAssetPut{URI: uri, Body: append([]byte(nil), body...), ContentType: contentType})
 	return f.err
+}
+
+func (f *fakeAssetStore) Get(_ context.Context, uri string) ([]byte, string, error) {
+	f.gets = append(f.gets, uri)
+	if f.get.Err != nil {
+		return nil, "", f.get.Err
+	}
+	return append([]byte(nil), f.get.Body...), f.get.ContentType, nil
 }
 
 func TestActType_RequiresRef(t *testing.T) {
@@ -415,5 +455,99 @@ func TestUploadAfterNavigate_ReturnsCaptureError(t *testing.T) {
 	err := svc.uploadAfterNavigate(context.Background(), "s3://browserd-snapshots/team_1/conv_1/1737373333.png")
 	if err == nil || err.Error() != "capture failed" {
 		t.Fatalf("expected capture failure, got %v", err)
+	}
+}
+
+func TestUploadFilesRequiresRef(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{
+		Sessions: session.NewManager(session.ManagerOptions{
+			Store:      profile.NewMemoryStore(),
+			Workdir:    t.TempDir(),
+			CDPBaseURL: "ws://browserd:9222/devtools/browser",
+		}),
+		State: browserrt.NewState(),
+	})
+
+	_, err := svc.UploadFiles("rt_1", UploadFilesInput{Files: []UploadFileSource{{S3Path: "s3://bucket/key.png"}}})
+
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request for missing ref, got %v", err)
+	}
+}
+
+func TestUploadFilesDownloadsS3FileAndSetsInput(t *testing.T) {
+	state := browserrt.NewState()
+	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{
+		SnapshotID: "snap_1",
+		Refs: map[string]browserrt.RefState{
+			"file_1": {Ref: "file_1", Kind: "element", TagName: "input", Selector: "#file"},
+		},
+	})
+	store := &fakeAssetStore{get: fakeAssetGet{Body: []byte("image-bytes"), ContentType: "image/png"}}
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: state, Assets: store})
+	var setterSelector string
+	var setterPaths []string
+	svc.setFileInputFiles = func(_ string, selector string, paths []string, _ int) error {
+		setterSelector = selector
+		setterPaths = append([]string(nil), paths...)
+		return nil
+	}
+
+	out, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		Ref: "file_1",
+		Files: []UploadFileSource{{
+			S3Path:   "s3://browserd-assets/team_1/image.png",
+			Filename: "cover.png",
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("UploadFiles returned error: %v", err)
+	}
+	if len(store.gets) != 1 || store.gets[0] != "s3://browserd-assets/team_1/image.png" {
+		t.Fatalf("expected S3 file download, got %+v", store.gets)
+	}
+	if setterSelector != "#file" {
+		t.Fatalf("unexpected selector: %s", setterSelector)
+	}
+	if len(setterPaths) != 1 {
+		t.Fatalf("expected one materialized file, got %+v", setterPaths)
+	}
+	if filepath.Base(setterPaths[0]) != "cover.png" {
+		t.Fatalf("expected sanitized filename cover.png, got %s", setterPaths[0])
+	}
+	raw, err := os.ReadFile(setterPaths[0])
+	if err != nil {
+		t.Fatalf("read materialized upload file: %v", err)
+	}
+	if string(raw) != "image-bytes" {
+		t.Fatalf("unexpected materialized body: %q", string(raw))
+	}
+	if !out.OK || out.Ref != "file_1" || !reflect.DeepEqual(out.FileNames, []string{"cover.png"}) {
+		t.Fatalf("unexpected upload output: %+v", out)
+	}
+}
+
+func TestUploadFilesRejectsLocalPathOutsideSession(t *testing.T) {
+	state := browserrt.NewState()
+	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{
+		SnapshotID: "snap_1",
+		Refs: map[string]browserrt.RefState{
+			"file_1": {Ref: "file_1", Kind: "element", TagName: "input", Selector: "#file"},
+		},
+	})
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: state})
+
+	_, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		Ref:   "file_1",
+		Files: []UploadFileSource{{LocalPath: filepath.Join(t.TempDir(), "x.png")}},
+	})
+
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request for local path outside session, got %v", err)
 	}
 }

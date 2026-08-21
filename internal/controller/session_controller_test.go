@@ -34,6 +34,9 @@ type fakeBrowserRuntime struct {
 	actErr        error
 	screenshotOut browser.ScreenshotOutput
 	screenshotErr error
+	uploadCalls   []browser.UploadFilesInput
+	uploadOut     browser.UploadFilesOutput
+	uploadErr     error
 	evaluateCalls []browser.EvaluateInput
 	evaluateOut   browser.EvaluateOutput
 	evaluateErr   error
@@ -80,6 +83,11 @@ func (f *fakeBrowserRuntime) Act(_ string, input browser.ActInput) (browser.ActO
 
 func (f *fakeBrowserRuntime) Screenshot(_ string, _ browser.ScreenshotInput) (browser.ScreenshotOutput, error) {
 	return f.screenshotOut, f.screenshotErr
+}
+
+func (f *fakeBrowserRuntime) UploadFiles(_ string, input browser.UploadFilesInput) (browser.UploadFilesOutput, error) {
+	f.uploadCalls = append(f.uploadCalls, input)
+	return f.uploadOut, f.uploadErr
 }
 
 func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (browser.EvaluateOutput, error) {
@@ -692,6 +700,82 @@ func TestEvaluate_ReturnsJSONResult(t *testing.T) {
 	}
 	if browserRuntime.evaluateCalls[0].Script != "return { title: document.title }" {
 		t.Fatalf("unexpected script: %+v", browserRuntime.evaluateCalls[0])
+	}
+}
+
+func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		uploadOut: browser.UploadFilesOutput{OK: true, Ref: "file_1", FileNames: []string{"cover.png"}},
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{
+		"ref":"file_1",
+		"files":[{"s3Path":"s3://browserd-assets/team_1/cover.png","filename":"cover.png"}],
+		"timeoutMs":1000
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.UploadFiles(rr, req, rid)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.uploadCalls) != 1 {
+		t.Fatalf("expected one upload call, got %d", len(browserRuntime.uploadCalls))
+	}
+	call := browserRuntime.uploadCalls[0]
+	if call.Ref != "file_1" || call.TimeoutMs != 1000 || len(call.Files) != 1 || call.Files[0].S3Path != "s3://browserd-assets/team_1/cover.png" {
+		t.Fatalf("unexpected upload call: %+v", call)
+	}
+	data := decodeData(t, rr)
+	if data["ref"] != "file_1" {
+		t.Fatalf("unexpected response: %+v", data)
+	}
+	if strings.Contains(rr.Body.String(), "/tmp/") {
+		t.Fatalf("upload response must not leak local paths: %s", rr.Body.String())
+	}
+}
+
+func TestUploadFiles_MapsFailureCode(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		uploadErr: fmt.Errorf("%w: input rejected", browser.ErrUploadFilesFailed),
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{"ref":"file_1","files":[{"s3Path":"s3://bucket/key.png"}]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.UploadFiles(rr, req, rid)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	errBody := body["error"].(map[string]any)
+	if errBody["code"] != "UPLOAD_FILES_FAILED" {
+		t.Fatalf("unexpected error: %+v", body)
 	}
 }
 

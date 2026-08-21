@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 
 type Store interface {
 	Put(ctx context.Context, uri string, body []byte, contentType string) error
+	Get(ctx context.Context, uri string) ([]byte, string, error)
 }
 
 type S3StoreConfig struct {
@@ -64,6 +66,32 @@ func (s *S3Store) Put(ctx context.Context, uri string, body []byte, contentType 
 		ContentType: aws.String(strings.TrimSpace(contentType)),
 	})
 	return err
+}
+
+func (s *S3Store) Get(ctx context.Context, uri string) ([]byte, string, error) {
+	bucket, key, err := parseS3URI(uri)
+	if err != nil {
+		return nil, "", err
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() {
+		_ = out.Body.Close()
+	}()
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	contentType := ""
+	if out.ContentType != nil {
+		contentType = strings.TrimSpace(*out.ContentType)
+	}
+	return body, contentType, nil
 }
 
 func parseS3URI(uri string) (bucket string, key string, err error) {

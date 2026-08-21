@@ -56,3 +56,19 @@ func TestNew_ServesBrowserLiveAssetsOutsideTokenPath(t *testing.T) {
 		t.Fatalf("expected immutable cache header, got %q", cache)
 	}
 }
+
+func TestNew_RoutesUploadFiles(t *testing.T) {
+	handler := New(config.Config{})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_missing/upload-files", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusNotFound {
+		t.Fatalf("upload-files route was not registered: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "NOT_FOUND") {
+		t.Fatalf("upload-files route returned not found: %s", rr.Body.String())
+	}
+}

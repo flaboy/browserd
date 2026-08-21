@@ -1,6 +1,9 @@
 package assets
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestParseS3URI(t *testing.T) {
 	bucket, key, err := parseS3URI("s3://browserd-snapshots/team_1/conv_1/1737373333.png")
@@ -21,5 +24,12 @@ func TestParseS3URI_RejectsInvalid(t *testing.T) {
 	}
 	if _, _, err := parseS3URI("s3://"); err == nil {
 		t.Fatalf("expected invalid uri error")
+	}
+}
+
+func TestS3StoreGetRejectsInvalidURI(t *testing.T) {
+	store := &S3Store{}
+	if _, _, err := store.Get(context.Background(), "http://example.com/x.png"); err == nil {
+		t.Fatalf("expected invalid scheme error")
 	}
 }

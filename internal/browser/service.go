@@ -28,6 +28,7 @@ var (
 	ErrNavigationFailed      = errors.New("navigation failed")
 	ErrActionFailed          = errors.New("action failed")
 	ErrEvaluateFailed        = errors.New("evaluate failed")
+	ErrUploadFilesFailed     = errors.New("upload files failed")
 	ErrScreenshotFailed      = errors.New("screenshot failed")
 	ErrPlaywrightUnavailable = errors.New("playwright not available")
 	ErrProxyHopFailed        = errors.New("proxy hop failed")
@@ -110,6 +111,24 @@ type ScreenshotOutput struct {
 	ByteLength  int    `json:"byteLength"`
 }
 
+type UploadFileSource struct {
+	S3Path    string `json:"s3Path,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
+	Filename  string `json:"filename,omitempty"`
+}
+
+type UploadFilesInput struct {
+	Ref       string             `json:"ref"`
+	Files     []UploadFileSource `json:"files"`
+	TimeoutMs int                `json:"timeoutMs,omitempty"`
+}
+
+type UploadFilesOutput struct {
+	OK        bool     `json:"ok"`
+	Ref       string   `json:"ref"`
+	FileNames []string `json:"fileNames"`
+}
+
 type EvaluateInput struct {
 	Script    string `json:"script"`
 	Args      []any  `json:"args,omitempty"`
@@ -129,10 +148,11 @@ type Service struct {
 	assets   assets.Store
 	proxyHop ProxyHopOptions
 
-	capturePNG func(context.Context) ([]byte, error)
-	mu         sync.Mutex
-	browsers   map[string]*activeBrowser
-	pointers   map[string]pointerState
+	capturePNG        func(context.Context) ([]byte, error)
+	setFileInputFiles func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
+	mu                sync.Mutex
+	browsers          map[string]*activeBrowser
+	pointers          map[string]pointerState
 }
 
 type pointerState struct {
@@ -190,7 +210,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 	if state == nil {
 		state = browserrt.NewState()
 	}
-	return &Service{
+	svc := &Service{
 		sessions:   opts.Sessions,
 		state:      state,
 		assets:     opts.Assets,
@@ -199,6 +219,8 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		browsers:   map[string]*activeBrowser{},
 		pointers:   map[string]pointerState{},
 	}
+	svc.setFileInputFiles = svc.defaultSetFileInputFiles
+	return svc
 }
 
 func (s *Service) PrepareSession(runtimeSessionID string) error {
@@ -629,6 +651,114 @@ func (s *Service) setPointer(runtimeSessionID string, point pointerPoint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pointers[runtimeSessionID] = pointerState{Point: point, Initialized: true}
+}
+
+func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (UploadFilesOutput, error) {
+	ref := strings.TrimSpace(input.Ref)
+	if ref == "" || len(input.Files) == 0 {
+		return UploadFilesOutput{}, ErrInvalidRequest
+	}
+	if s.sessions == nil || s.state == nil {
+		return UploadFilesOutput{}, ErrInvalidRequest
+	}
+	refState, err := s.state.GetRef(runtimeSessionID, ref)
+	if err != nil {
+		return UploadFilesOutput{}, err
+	}
+	if refState.Kind != "element" || strings.ToLower(strings.TrimSpace(refState.TagName)) != "input" {
+		return UploadFilesOutput{}, browserrt.ErrInvalidRef
+	}
+	info, err := s.sessions.Get(runtimeSessionID)
+	if err != nil {
+		return UploadFilesOutput{}, err
+	}
+	uploadDir := filepath.Join(filepath.Dir(info.ProfileDir), "uploads")
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		return UploadFilesOutput{}, err
+	}
+	filePaths := make([]string, 0, len(input.Files))
+	fileNames := make([]string, 0, len(input.Files))
+	for index, source := range input.Files {
+		path, name, err := s.materializeUploadSource(context.Background(), uploadDir, index, source)
+		if err != nil {
+			return UploadFilesOutput{}, err
+		}
+		filePaths = append(filePaths, path)
+		fileNames = append(fileNames, name)
+	}
+	setter := s.setFileInputFiles
+	if setter == nil {
+		setter = s.defaultSetFileInputFiles
+	}
+	if err := setter(runtimeSessionID, refState.Selector, filePaths, input.TimeoutMs); err != nil {
+		return UploadFilesOutput{}, fmt.Errorf("%w: %v", ErrUploadFilesFailed, err)
+	}
+	return UploadFilesOutput{OK: true, Ref: ref, FileNames: fileNames}, nil
+}
+
+func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string, index int, source UploadFileSource) (string, string, error) {
+	s3Path := strings.TrimSpace(source.S3Path)
+	localPath := strings.TrimSpace(source.LocalPath)
+	if (s3Path == "" && localPath == "") || (s3Path != "" && localPath != "") {
+		return "", "", ErrInvalidRequest
+	}
+	name := sanitizeUploadFilename(source.Filename)
+	if name == "" {
+		if s3Path != "" {
+			name = sanitizeUploadFilename(filepath.Base(strings.TrimPrefix(s3Path, "s3://")))
+		} else {
+			name = sanitizeUploadFilename(filepath.Base(localPath))
+		}
+	}
+	if name == "" || name == "." {
+		name = fmt.Sprintf("upload-%d.bin", index+1)
+	}
+	if s3Path != "" {
+		if s.assets == nil {
+			return "", "", ErrInvalidRequest
+		}
+		body, _, err := s.assets.Get(ctx, s3Path)
+		if err != nil {
+			return "", "", err
+		}
+		outPath := filepath.Join(uploadDir, name)
+		if err := os.WriteFile(outPath, body, 0o600); err != nil {
+			return "", "", err
+		}
+		return outPath, name, nil
+	}
+	cleanLocal, err := filepath.Abs(localPath)
+	if err != nil {
+		return "", "", ErrInvalidRequest
+	}
+	allowedRoot, err := filepath.Abs(uploadDir)
+	if err != nil {
+		return "", "", ErrInvalidRequest
+	}
+	rel, err := filepath.Rel(allowedRoot, cleanLocal)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." || filepath.IsAbs(rel) {
+		return "", "", ErrInvalidRequest
+	}
+	return cleanLocal, name, nil
+}
+
+func sanitizeUploadFilename(value string) string {
+	name := filepath.Base(strings.TrimSpace(value))
+	name = strings.ReplaceAll(name, string(os.PathSeparator), "_")
+	name = strings.TrimSpace(name)
+	if name == "." || name == string(os.PathSeparator) {
+		return ""
+	}
+	return name
+}
+
+func (s *Service) defaultSetFileInputFiles(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error {
+	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, timeoutMs)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return chromedp.Run(ctx, chromedp.SetUploadFiles(selector, filePaths, chromedp.ByQuery))
 }
 
 func pageGroupsToState(groups map[string]PageTable) map[string]any {

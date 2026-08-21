@@ -41,6 +41,7 @@ type browserRuntime interface {
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
 	Act(runtimeSessionID string, input browser.ActInput) (browser.ActOutput, error)
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
+	UploadFiles(runtimeSessionID string, input browser.UploadFilesInput) (browser.UploadFilesOutput, error)
 	Evaluate(runtimeSessionID string, input browser.EvaluateInput) (browser.EvaluateOutput, error)
 }
 
@@ -147,6 +148,18 @@ type screenshotRequest struct {
 	FullPage bool   `json:"fullPage,omitempty"`
 	Format   string `json:"format,omitempty"`
 	Quality  int    `json:"quality,omitempty"`
+}
+
+type uploadFileSourceRequest struct {
+	S3Path    string `json:"s3Path,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
+	Filename  string `json:"filename,omitempty"`
+}
+
+type uploadFilesRequest struct {
+	Ref       string                    `json:"ref"`
+	Files     []uploadFileSourceRequest `json:"files"`
+	TimeoutMs int                       `json:"timeoutMs,omitempty"`
 }
 
 type evaluateRequest struct {
@@ -374,6 +387,40 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 		FullPage: req.FullPage,
 		Format:   req.Format,
 		Quality:  req.Quality,
+	})
+	if err != nil {
+		writeBrowserErr(w, err)
+		return
+	}
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	if h.browser == nil {
+		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
+		return
+	}
+	var req uploadFilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	files := make([]browser.UploadFileSource, 0, len(req.Files))
+	for _, file := range req.Files {
+		files = append(files, browser.UploadFileSource{
+			S3Path:    file.S3Path,
+			LocalPath: file.LocalPath,
+			Filename:  file.Filename,
+		})
+	}
+	out, err := h.browser.UploadFiles(runtimeSessionID, browser.UploadFilesInput{
+		Ref:       req.Ref,
+		Files:     files,
+		TimeoutMs: req.TimeoutMs,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)
@@ -610,6 +657,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):
 		types.WriteErr(w, http.StatusBadGateway, "ACTION_FAILED", err.Error())
+	case errors.Is(err, browser.ErrUploadFilesFailed):
+		types.WriteErr(w, http.StatusBadGateway, "UPLOAD_FILES_FAILED", err.Error())
 	case strings.Contains(err.Error(), "EVALUATE_RESULT_NOT_JSON:"):
 		types.WriteErr(w, http.StatusBadRequest, "EVALUATE_RESULT_NOT_JSON", normalizeEvaluateResultNotJSONMessage(err.Error()))
 	case errors.Is(err, browser.ErrEvaluateFailed):
