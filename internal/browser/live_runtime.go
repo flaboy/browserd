@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,8 @@ import (
 )
 
 var ErrLiveRuntimeUnhealthy = errors.New("live runtime unhealthy")
+
+const defaultX11SocketDir = "/tmp/.X11-unix"
 
 type LiveRuntimePlan struct {
 	Display        string
@@ -105,6 +108,9 @@ func (p LiveRuntimePlan) Commands() []LiveCommand {
 }
 
 func (r *LiveRuntime) Start(ctx context.Context) error {
+	if err := validateX11SocketDir(defaultX11SocketDir); err != nil {
+		return err
+	}
 	for _, spec := range r.Plan.Commands() {
 		proc, err := r.startProcess(ctx, spec)
 		if err != nil {
@@ -118,6 +124,30 @@ func (r *LiveRuntime) Start(ctx context.Context) error {
 			_ = r.Stop(context.Background())
 			return err
 		}
+	}
+	return nil
+}
+
+func validateX11SocketDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s must exist as a root-owned directory before starting Xvfb; prepare it with mode 1777", ErrLiveRuntimeUnhealthy, path)
+		}
+		return fmt.Errorf("%w: inspect %s: %v", ErrLiveRuntimeUnhealthy, path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: %s must be a root-owned directory before starting Xvfb", ErrLiveRuntimeUnhealthy, path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if stat.Uid != 0 {
+		return fmt.Errorf("%w: %s must be root-owned before starting Xvfb; prepare it with mode 1777", ErrLiveRuntimeUnhealthy, path)
+	}
+	if info.Mode().Perm()&0777 != 0777 || info.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("%w: %s must use mode 1777 before starting Xvfb", ErrLiveRuntimeUnhealthy, path)
 	}
 	return nil
 }

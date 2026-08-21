@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,6 +77,17 @@ func TestLiveRuntimeCommandsUseSessionDisplay(t *testing.T) {
 	}
 	if commands[2].Args[1] != ":99" {
 		t.Fatalf("expected x11vnc to use display, got %+v", commands[2])
+	}
+}
+
+func TestValidateX11SocketDirRejectsNonRootOwnedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	err := validateX11SocketDir(dir)
+	if !errors.Is(err, ErrLiveRuntimeUnhealthy) {
+		t.Fatalf("expected ErrLiveRuntimeUnhealthy, got %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "root-owned") {
+		t.Fatalf("expected root-owned guidance, got %v", err)
 	}
 }
 
