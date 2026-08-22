@@ -41,6 +41,9 @@ function connect() {
   rfb.addEventListener('disconnect', (event: Event) => {
     const detail = (event as CustomEvent).detail as { clean?: boolean } | undefined
     setStatus(detail?.clean ? 'Disconnected' : 'Connection lost', !detail?.clean)
+    if (detail?.clean) {
+      window.setTimeout(() => window.close(), 250)
+    }
   })
   rfb.addEventListener('securityfailure', () => setStatus('Security failure', true))
   rfb.addEventListener('credentialsrequired', () => setStatus('Credentials required', true))

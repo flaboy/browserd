@@ -161,6 +161,20 @@ Content-Type: application/json
 }
 ```
 
+点击视口坐标（用于 closed shadow DOM/custom element 内部热区等无法稳定暴露 `ref` 的页面）：
+
+```http
+POST /v1/sessions/{runtimeSessionId}/act
+Content-Type: application/json
+
+{
+  "action": "click",
+  "x": 742.5,
+  "y": 724,
+  "motionProfile": "direct"
+}
+```
+
 输入并提交（一次调用完成）：
 
 ```http
@@ -178,6 +192,7 @@ Content-Type: application/json
 
 约束：
 - `click` / `fill` / `press` / `hover` / `select` / `waitFor` 只接受 `e*`
+- `click` 可不传 `ref`，改传视口坐标 `x` / `y`；坐标点击同样通过 CDP mouse events 执行
 - `click` 通过 CDP mouse events 执行，默认 `motionProfile=humanized` 会先生成 mousemove 轨迹再 press/release
 - `type` 必须显式指定 `ref`，先聚焦目标，再通过 CDP `Input.insertText` 插入文本；不依赖当前焦点
 - `type` 的 `submit` 为 `true` 时，在同一次 CDP 往返里紧接着按下 Enter。提交表单或触发搜索一律用它，

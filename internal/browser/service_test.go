@@ -392,6 +392,19 @@ func TestValidateActionRef_RejectsTextRefForClick(t *testing.T) {
 	}
 }
 
+func TestAct_ClickSupportsViewportCoordinates(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, marker := range []string{"func (s *Service) trustedClickPoint", "input.X <= 0 || input.Y <= 0", "strings.TrimSpace(input.Ref) == \"\""} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("Act click coordinate path missing %q", marker)
+		}
+	}
+}
+
 func TestValidateActionRef_AllowsTextRefForScrollIntoView(t *testing.T) {
 	err := validateActionRef("scrollIntoView", browserrt.RefState{
 		Ref:  "t1",
@@ -608,6 +621,35 @@ func TestUploadFilesRejectsLocalPathOutsideSession(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected invalid request for local path outside session, got %v", err)
+	}
+}
+
+func TestUploadFilesReportsURLFetchFailure(t *testing.T) {
+	state := browserrt.NewState()
+	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{
+		SnapshotID: "snap_1",
+		Refs: map[string]browserrt.RefState{
+			"file_1": {Ref: "file_1", Kind: "element", TagName: "input", Selector: "#file"},
+		},
+	})
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: state})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing image", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		Ref:   "file_1",
+		Files: []UploadFileSource{{URL: server.URL + "/missing.png", Filename: "cover.png"}},
+	})
+
+	if !errors.Is(err, ErrUploadSourceFetchFailed) {
+		t.Fatalf("expected upload source fetch failure, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 404") || !strings.Contains(err.Error(), "/missing.png") {
+		t.Fatalf("expected actionable URL fetch error, got %v", err)
 	}
 }
 

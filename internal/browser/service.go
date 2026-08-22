@@ -27,15 +27,16 @@ import (
 )
 
 var (
-	ErrInvalidRequest        = errors.New("invalid request")
-	ErrInvalidKey            = errors.New("invalid key")
-	ErrNavigationFailed      = errors.New("navigation failed")
-	ErrActionFailed          = errors.New("action failed")
-	ErrEvaluateFailed        = errors.New("evaluate failed")
-	ErrUploadFilesFailed     = errors.New("upload files failed")
-	ErrScreenshotFailed      = errors.New("screenshot failed")
-	ErrPlaywrightUnavailable = errors.New("playwright not available")
-	ErrProxyHopFailed        = errors.New("proxy hop failed")
+	ErrInvalidRequest          = errors.New("invalid request")
+	ErrInvalidKey              = errors.New("invalid key")
+	ErrNavigationFailed        = errors.New("navigation failed")
+	ErrActionFailed            = errors.New("action failed")
+	ErrEvaluateFailed          = errors.New("evaluate failed")
+	ErrUploadFilesFailed       = errors.New("upload files failed")
+	ErrUploadSourceFetchFailed = errors.New("upload source fetch failed")
+	ErrScreenshotFailed        = errors.New("screenshot failed")
+	ErrPlaywrightUnavailable   = errors.New("playwright not available")
+	ErrProxyHopFailed          = errors.New("proxy hop failed")
 )
 
 type NavigateInput struct {
@@ -82,6 +83,8 @@ type SnapshotOutput struct {
 type ActInput struct {
 	Action        string   `json:"action"`
 	Ref           string   `json:"ref,omitempty"`
+	X             float64  `json:"x,omitempty"`
+	Y             float64  `json:"y,omitempty"`
 	Text          string   `json:"text,omitempty"`
 	Key           string   `json:"key,omitempty"`
 	Value         string   `json:"value,omitempty"`
@@ -395,14 +398,21 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 
 	switch input.Action {
 	case "click":
-		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
-		if refErr != nil {
-			return ActOutput{}, refErr
+		if strings.TrimSpace(input.Ref) == "" {
+			if input.X <= 0 || input.Y <= 0 {
+				return ActOutput{}, ErrInvalidRequest
+			}
+			err = s.trustedClickPoint(ctx, runtimeSessionID, input)
+		} else {
+			refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+			if refErr != nil {
+				return ActOutput{}, refErr
+			}
+			if err := validateActionRef(input.Action, refState); err != nil {
+				return ActOutput{}, err
+			}
+			err = s.trustedClick(ctx, runtimeSessionID, refState.Selector, input)
 		}
-		if err := validateActionRef(input.Action, refState); err != nil {
-			return ActOutput{}, err
-		}
-		err = s.trustedClick(ctx, runtimeSessionID, refState.Selector, input)
 	case "doubleClick":
 		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
 		if refErr != nil {
@@ -562,6 +572,18 @@ func (s *Service) trustedClick(ctx context.Context, runtimeSessionID string, sel
 	target, err := queryTargetBySelector(ctx, selector, false)
 	if err != nil {
 		return err
+	}
+	return s.trustedClickTarget(ctx, runtimeSessionID, target, input)
+}
+
+func (s *Service) trustedClickPoint(ctx context.Context, runtimeSessionID string, input ActInput) error {
+	target := browserTarget{
+		Rect: targetRect{
+			X:      input.X - 0.5,
+			Y:      input.Y - 0.5,
+			Width:  1,
+			Height: 1,
+		},
 	}
 	return s.trustedClickTarget(ctx, runtimeSessionID, target, input)
 }
@@ -758,13 +780,18 @@ func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string,
 		}
 		res, err := client.Do(req)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("%w: GET %s failed: %v", ErrUploadSourceFetchFailed, uploadSourceURLForError(sourceURL), err)
 		}
 		defer func() {
 			_ = res.Body.Close()
 		}()
 		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			return "", "", ErrInvalidRequest
+			body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+			detail := strings.TrimSpace(string(body))
+			if detail == "" {
+				detail = res.Status
+			}
+			return "", "", fmt.Errorf("%w: GET %s returned HTTP %d: %s", ErrUploadSourceFetchFailed, uploadSourceURLForError(sourceURL), res.StatusCode, detail)
 		}
 		outPath := filepath.Join(uploadDir, name)
 		out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -792,6 +819,16 @@ func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string,
 		return "", "", ErrInvalidRequest
 	}
 	return cleanLocal, name, nil
+}
+
+func uploadSourceURLForError(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func sanitizeUploadFilename(value string) string {

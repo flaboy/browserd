@@ -157,6 +157,34 @@ func TestAct_ForwardsTrustedInputFields(t *testing.T) {
 	}
 }
 
+func TestAct_ForwardsViewportCoordinates(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "click"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+			"action":"click",
+			"x":742.5,
+			"y":724,
+			"motionProfile":"direct",
+			"timeoutMs":5000
+		}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 1 {
+		t.Fatalf("expected one act call, got %+v", browserRuntime.actCalls)
+	}
+	call := browserRuntime.actCalls[0]
+	if call.Action != "click" || call.Ref != "" || call.X != 742.5 || call.Y != 724 || call.MotionProfile != "direct" || call.TimeoutMs != 5000 {
+		t.Fatalf("unexpected act call: %+v", call)
+	}
+}
+
 func TestAct_RejectsTargetField(t *testing.T) {
 	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
 	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
@@ -836,6 +864,42 @@ func TestUploadFiles_MapsFailureCode(t *testing.T) {
 	errBody := body["error"].(map[string]any)
 	if errBody["code"] != "UPLOAD_FILES_FAILED" {
 		t.Fatalf("unexpected error: %+v", body)
+	}
+}
+
+func TestUploadFiles_MapsUploadSourceFetchFailureCode(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		uploadErr: fmt.Errorf("%w: GET http://asset.example.test/missing.png returned HTTP 404: missing", browser.ErrUploadSourceFetchFailed),
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{"ref":"file_1","files":[{"url":"http://asset.example.test/missing.png"}]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.UploadFiles(rr, req, rid)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	errBody := body["error"].(map[string]any)
+	if errBody["code"] != "UPLOAD_SOURCE_FETCH_FAILED" {
+		t.Fatalf("unexpected error: %+v", body)
+	}
+	if !strings.Contains(fmt.Sprint(errBody["message"]), "HTTP 404") {
+		t.Fatalf("expected actionable error message, got %+v", errBody)
 	}
 }
 

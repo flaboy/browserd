@@ -131,6 +131,8 @@ type actRequest struct {
 	Action        string          `json:"action"`
 	Ref           string          `json:"ref,omitempty"`
 	Target        json.RawMessage `json:"target,omitempty"`
+	X             float64         `json:"x,omitempty"`
+	Y             float64         `json:"y,omitempty"`
 	Text          string          `json:"text,omitempty"`
 	Key           string          `json:"key,omitempty"`
 	Value         string          `json:"value,omitempty"`
@@ -356,6 +358,8 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 	out, err := h.browser.Act(runtimeSessionID, browser.ActInput{
 		Action:        req.Action,
 		Ref:           req.Ref,
+		X:             req.X,
+		Y:             req.Y,
 		Text:          req.Text,
 		Key:           req.Key,
 		Value:         req.Value,
@@ -662,6 +666,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadGateway, "ACTION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrUploadFilesFailed):
 		types.WriteErr(w, http.StatusBadGateway, "UPLOAD_FILES_FAILED", err.Error())
+	case errors.Is(err, browser.ErrUploadSourceFetchFailed):
+		types.WriteErr(w, http.StatusBadGateway, "UPLOAD_SOURCE_FETCH_FAILED", err.Error())
 	case strings.Contains(err.Error(), "EVALUATE_RESULT_NOT_JSON:"):
 		types.WriteErr(w, http.StatusBadRequest, "EVALUATE_RESULT_NOT_JSON", normalizeEvaluateResultNotJSONMessage(err.Error()))
 	case errors.Is(err, browser.ErrEvaluateFailed):
