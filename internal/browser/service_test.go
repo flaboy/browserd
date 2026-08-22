@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -523,6 +525,62 @@ func TestUploadFilesDownloadsS3FileAndSetsInput(t *testing.T) {
 		t.Fatalf("read materialized upload file: %v", err)
 	}
 	if string(raw) != "image-bytes" {
+		t.Fatalf("unexpected materialized body: %q", string(raw))
+	}
+	if !out.OK || out.Ref != "file_1" || !reflect.DeepEqual(out.FileNames, []string{"cover.png"}) {
+		t.Fatalf("unexpected upload output: %+v", out)
+	}
+}
+
+func TestUploadFilesDownloadsURLFileAndSetsInput(t *testing.T) {
+	state := browserrt.NewState()
+	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{
+		SnapshotID: "snap_1",
+		Refs: map[string]browserrt.RefState{
+			"file_1": {Ref: "file_1", Kind: "element", TagName: "input", Selector: "#file"},
+		},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/media/cover.png" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		if _, err := fmt.Fprint(w, "image-by-url"); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: state})
+	var setterPaths []string
+	svc.setFileInputFiles = func(_ string, _ string, paths []string, _ int) error {
+		setterPaths = append([]string(nil), paths...)
+		return nil
+	}
+
+	out, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		Ref: "file_1",
+		Files: []UploadFileSource{{
+			URL:      server.URL + "/media/cover.png",
+			Filename: "cover.png",
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("UploadFiles returned error: %v", err)
+	}
+	if len(setterPaths) != 1 {
+		t.Fatalf("expected one materialized URL file, got %+v", setterPaths)
+	}
+	if filepath.Base(setterPaths[0]) != "cover.png" {
+		t.Fatalf("expected sanitized filename cover.png, got %s", setterPaths[0])
+	}
+	raw, err := os.ReadFile(setterPaths[0])
+	if err != nil {
+		t.Fatalf("read materialized URL file: %v", err)
+	}
+	if string(raw) != "image-by-url" {
 		t.Fatalf("unexpected materialized body: %q", string(raw))
 	}
 	if !out.OK || out.Ref != "file_1" || !reflect.DeepEqual(out.FileNames, []string{"cover.png"}) {

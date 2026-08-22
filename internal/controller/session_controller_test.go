@@ -703,6 +703,57 @@ func TestEvaluate_ReturnsJSONResult(t *testing.T) {
 	}
 }
 
+func TestEvaluate_DuringHandoffRequiresExplicitOptIn(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		evaluateOut: browser.EvaluateOutput{
+			Result: map[string]any{"loggedIn": true},
+			URL:    "https://example.com/",
+			Title:  "Example",
+		},
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:     manager,
+		Browser:     browserRuntime,
+		CDPBaseURL:  "ws://browserd:9222/devtools/browser",
+		LiveBaseURL: "https://browser.example",
+		TokenStore:  live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rid := createTestSession(t, handler)
+	startControlHandoff(t, handler, rid)
+
+	blockedReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/evaluate", bytes.NewReader([]byte(`{
+		"script":"return { loggedIn: true }"
+	}`)))
+	blockedReq.Header.Set("Content-Type", "application/json")
+	blockedRR := httptest.NewRecorder()
+	handler.Evaluate(blockedRR, blockedReq, rid)
+	if blockedRR.Code != http.StatusConflict {
+		t.Fatalf("expected active handoff evaluate to be blocked, got %d body=%s", blockedRR.Code, blockedRR.Body.String())
+	}
+	if len(browserRuntime.evaluateCalls) != 0 {
+		t.Fatalf("blocked evaluate should not reach browser runtime")
+	}
+
+	allowedReq := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/evaluate", bytes.NewReader([]byte(`{
+		"script":"return { loggedIn: true }",
+		"allowDuringHandoff":true
+	}`)))
+	allowedReq.Header.Set("Content-Type", "application/json")
+	allowedRR := httptest.NewRecorder()
+	handler.Evaluate(allowedRR, allowedReq, rid)
+	if allowedRR.Code != http.StatusOK {
+		t.Fatalf("expected explicit opt-in evaluate to pass, got %d body=%s", allowedRR.Code, allowedRR.Body.String())
+	}
+	if len(browserRuntime.evaluateCalls) != 1 || browserRuntime.evaluateCalls[0].Script != "return { loggedIn: true }" {
+		t.Fatalf("unexpected evaluate calls: %+v", browserRuntime.evaluateCalls)
+	}
+}
+
 func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
@@ -721,7 +772,10 @@ func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{
 		"ref":"file_1",
-		"files":[{"s3Path":"s3://browserd-assets/team_1/cover.png","filename":"cover.png"}],
+		"files":[
+			{"s3Path":"s3://browserd-assets/team_1/cover.png","filename":"cover.png"},
+			{"url":"https://cdn.example.test/team_1/gallery.png","filename":"gallery.png"}
+		],
 		"timeoutMs":1000
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -734,7 +788,13 @@ func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
 		t.Fatalf("expected one upload call, got %d", len(browserRuntime.uploadCalls))
 	}
 	call := browserRuntime.uploadCalls[0]
-	if call.Ref != "file_1" || call.TimeoutMs != 1000 || len(call.Files) != 1 || call.Files[0].S3Path != "s3://browserd-assets/team_1/cover.png" {
+	if call.Ref != "file_1" || call.TimeoutMs != 1000 || len(call.Files) != 2 {
+		t.Fatalf("unexpected upload call: %+v", call)
+	}
+	if call.Files[0].S3Path != "s3://browserd-assets/team_1/cover.png" || call.Files[0].Filename != "cover.png" {
+		t.Fatalf("unexpected S3 upload source: %+v", call.Files[0])
+	}
+	if call.Files[1].URL != "https://cdn.example.test/team_1/gallery.png" || call.Files[1].Filename != "gallery.png" {
 		t.Fatalf("unexpected upload call: %+v", call)
 	}
 	data := decodeData(t, rr)

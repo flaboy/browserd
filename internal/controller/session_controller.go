@@ -153,6 +153,7 @@ type screenshotRequest struct {
 type uploadFileSourceRequest struct {
 	S3Path    string `json:"s3Path,omitempty"`
 	LocalPath string `json:"localPath,omitempty"`
+	URL       string `json:"url,omitempty"`
 	Filename  string `json:"filename,omitempty"`
 }
 
@@ -163,10 +164,11 @@ type uploadFilesRequest struct {
 }
 
 type evaluateRequest struct {
-	Script    string `json:"script"`
-	Args      []any  `json:"args,omitempty"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
-	World     string `json:"world,omitempty"`
+	Script             string `json:"script"`
+	Args               []any  `json:"args,omitempty"`
+	TimeoutMs          int    `json:"timeoutMs,omitempty"`
+	World              string `json:"world,omitempty"`
+	AllowDuringHandoff bool   `json:"allowDuringHandoff,omitempty"`
 }
 
 type liveViewRequest struct {
@@ -414,6 +416,7 @@ func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, 
 		files = append(files, browser.UploadFileSource{
 			S3Path:    file.S3Path,
 			LocalPath: file.LocalPath,
+			URL:       file.URL,
 			Filename:  file.Filename,
 		})
 	}
@@ -434,13 +437,13 @@ func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, run
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
-	if h.hasActiveHandoff(runtimeSessionID) {
-		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
-		return
-	}
 	var req evaluateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) && !req.AllowDuringHandoff {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	out, err := h.browser.Evaluate(runtimeSessionID, browser.EvaluateInput{

@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +117,7 @@ type ScreenshotOutput struct {
 type UploadFileSource struct {
 	S3Path    string `json:"s3Path,omitempty"`
 	LocalPath string `json:"localPath,omitempty"`
+	URL       string `json:"url,omitempty"`
 	Filename  string `json:"filename,omitempty"`
 }
 
@@ -699,15 +703,29 @@ func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (
 func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string, index int, source UploadFileSource) (string, string, error) {
 	s3Path := strings.TrimSpace(source.S3Path)
 	localPath := strings.TrimSpace(source.LocalPath)
-	if (s3Path == "" && localPath == "") || (s3Path != "" && localPath != "") {
+	sourceURL := strings.TrimSpace(source.URL)
+	sourceCount := 0
+	for _, value := range []string{s3Path, localPath, sourceURL} {
+		if value != "" {
+			sourceCount++
+		}
+	}
+	if sourceCount != 1 {
 		return "", "", ErrInvalidRequest
 	}
 	name := sanitizeUploadFilename(source.Filename)
 	if name == "" {
-		if s3Path != "" {
+		switch {
+		case s3Path != "":
 			name = sanitizeUploadFilename(filepath.Base(strings.TrimPrefix(s3Path, "s3://")))
-		} else {
+		case localPath != "":
 			name = sanitizeUploadFilename(filepath.Base(localPath))
+		case sourceURL != "":
+			parsed, err := url.Parse(sourceURL)
+			if err != nil {
+				return "", "", ErrInvalidRequest
+			}
+			name = sanitizeUploadFilename(filepath.Base(parsed.Path))
 		}
 	}
 	if name == "" || name == "." {
@@ -723,6 +741,39 @@ func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string,
 		}
 		outPath := filepath.Join(uploadDir, name)
 		if err := os.WriteFile(outPath, body, 0o600); err != nil {
+			return "", "", err
+		}
+		return outPath, name, nil
+	}
+	if sourceURL != "" {
+		parsed, err := url.Parse(sourceURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return "", "", ErrInvalidRequest
+		}
+		client := &http.Client{Timeout: 2 * time.Minute}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+		if err != nil {
+			return "", "", ErrInvalidRequest
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer func() {
+			_ = res.Body.Close()
+		}()
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return "", "", ErrInvalidRequest
+		}
+		outPath := filepath.Join(uploadDir, name)
+		out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return "", "", err
+		}
+		defer func() {
+			_ = out.Close()
+		}()
+		if _, err := io.Copy(out, res.Body); err != nil {
 			return "", "", err
 		}
 		return outPath, name, nil
