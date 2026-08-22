@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -750,7 +751,7 @@ func (s *Service) materializeUploadSource(ctx context.Context, uploadDir string,
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return "", "", ErrInvalidRequest
 		}
-		client := &http.Client{Timeout: 2 * time.Minute}
+		client := newUploadHTTPClient()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 		if err != nil {
 			return "", "", ErrInvalidRequest
@@ -801,6 +802,29 @@ func sanitizeUploadFilename(value string) string {
 		return ""
 	}
 	return name
+}
+
+func newUploadHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		if shouldBypassUploadURLProxy(req.URL) {
+			return nil, nil
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+	return &http.Client{Timeout: 2 * time.Minute, Transport: transport}
+}
+
+func shouldBypassUploadURLProxy(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if host == "localhost" || host == "host.docker.internal" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Service) defaultSetFileInputFiles(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error {

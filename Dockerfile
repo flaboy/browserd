@@ -30,6 +30,7 @@ RUN apk add --no-cache \
     font-noto-cjk \
     ca-certificates \
     ttf-freefont
+RUN mkdir -p /tmp/.X11-unix && chown 0:0 /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 RUN addgroup -S app && adduser -S app -G app
 USER app
 WORKDIR /app

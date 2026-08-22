@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -607,5 +608,27 @@ func TestUploadFilesRejectsLocalPathOutsideSession(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected invalid request for local path outside session, got %v", err)
+	}
+}
+
+func TestShouldBypassUploadURLProxyForLocalHosts(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"http://host.docker.internal:13021/asset.png", true},
+		{"http://localhost:13021/asset.png", true},
+		{"http://127.0.0.1:13021/asset.png", true},
+		{"http://[::1]:13021/asset.png", true},
+		{"https://cdn.example.test/asset.png", false},
+	}
+	for _, tc := range cases {
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("parse %s: %v", tc.raw, err)
+		}
+		if got := shouldBypassUploadURLProxy(u); got != tc.want {
+			t.Fatalf("shouldBypassUploadURLProxy(%s) = %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }
