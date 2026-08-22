@@ -424,33 +424,25 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 		selector := refState.Selector
 		err = chromedp.Run(ctx, chromedp.DoubleClick(selector, chromedp.ByQuery))
 	case "hover":
-		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
+		target, refErr := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
 		if refErr != nil {
 			return ActOutput{}, refErr
 		}
-		if err := validateActionRef(input.Action, refState); err != nil {
-			return ActOutput{}, err
-		}
-		selector := refState.Selector
-		err = chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(() => {
-      const el = document.querySelector(%q);
-      if (!el) throw new Error("missing");
-      el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-      el.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-      return true;
-    })()`, selector), nil))
+		_, err = s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
 	case "type":
 		err = s.trustedTextInput(ctx, runtimeSessionID, input)
 	case "fill":
-		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
-		if refErr != nil {
-			return ActOutput{}, refErr
-		}
-		if err := validateActionRef(input.Action, refState); err != nil {
-			return ActOutput{}, err
-		}
-		selector := refState.Selector
-		err = chromedp.Run(ctx, chromedp.SetValue(selector, input.Value, chromedp.ByQuery))
+		err = s.trustedTextInput(ctx, runtimeSessionID, ActInput{
+			Action:        "type",
+			Ref:           input.Ref,
+			Text:          input.Value,
+			Clear:         true,
+			Submit:        input.Submit,
+			Button:        input.Button,
+			ClickCount:    input.ClickCount,
+			MotionProfile: input.MotionProfile,
+			TimeoutMs:     input.TimeoutMs,
+		})
 	case "press":
 		refState, refErr := s.state.GetRef(runtimeSessionID, input.Ref)
 		if refErr != nil {
@@ -501,6 +493,9 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 	if err != nil {
 		return ActOutput{}, fmt.Errorf("%w: %v", ErrActionFailed, err)
 	}
+	if err := sleepBehavior(ctx, defaultBehaviorProfile().ActionAfterDelay); err != nil {
+		return ActOutput{}, fmt.Errorf("%w: %v", ErrActionFailed, err)
+	}
 
 	var url string
 	var title string
@@ -529,7 +524,7 @@ func validateActionRef(action string, ref browserrt.RefState) error {
 }
 
 func (s *Service) trustedTextInput(ctx context.Context, runtimeSessionID string, input ActInput) error {
-	if strings.TrimSpace(input.Text) == "" {
+	if strings.TrimSpace(input.Text) == "" && !input.Clear {
 		return ErrInvalidRequest
 	}
 	if input.Ref == "" {
@@ -554,18 +549,38 @@ func (s *Service) trustedTextInput(ctx context.Context, runtimeSessionID string,
 	if !editable {
 		return ErrInvalidRequest
 	}
+	profile := defaultBehaviorProfile()
 	before, after := planTextInputKeys(input.Clear, input.Submit)
-	actions := make([]chromedp.Action, 0, len(before)+len(after)+1)
-	for _, key := range before {
-		actions = append(actions, keyEventAction(key))
-	}
-	actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
-		return cdinput.InsertText(input.Text).Do(ctx)
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		for _, key := range before {
+			if err := keyEventAction(key).Do(ctx); err != nil {
+				return err
+			}
+			if err := sleepBehavior(ctx, profile.KeyAfterDelay); err != nil {
+				return err
+			}
+		}
+		parts := splitTextRunes(input.Text)
+		for index, part := range parts {
+			if err := cdinput.InsertText(part).Do(ctx); err != nil {
+				return err
+			}
+			if index < len(parts)-1 {
+				if err := sleepBehavior(ctx, profile.TypeRuneDelay); err != nil {
+					return err
+				}
+			}
+		}
+		for _, key := range after {
+			if err := sleepBehavior(ctx, profile.KeyAfterDelay); err != nil {
+				return err
+			}
+			if err := keyEventAction(key).Do(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
 	}))
-	for _, key := range after {
-		actions = append(actions, keyEventAction(key))
-	}
-	return chromedp.Run(ctx, actions...)
 }
 
 func (s *Service) trustedClick(ctx context.Context, runtimeSessionID string, selector string, input ActInput) error {
@@ -589,10 +604,11 @@ func (s *Service) trustedClickPoint(ctx context.Context, runtimeSessionID string
 }
 
 func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) error {
-	viewport := viewportRect{Width: 1366, Height: 768}
-	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
-	start := s.pointerStart(runtimeSessionID, viewport)
-	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile)
+	profile := defaultBehaviorProfile()
+	end, err := s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
+	if err != nil {
+		return err
+	}
 	button := cdinput.Left
 	switch input.Button {
 	case "right":
@@ -605,21 +621,47 @@ func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID strin
 		clickCount = 1
 	}
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		for _, point := range path {
-			if err := cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx); err != nil {
-				return err
-			}
+		if err := sleepBehavior(ctx, profile.MouseBeforeDownDelay); err != nil {
+			return err
 		}
-		end := path[len(path)-1]
 		if err := cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
+			return err
+		}
+		if err := sleepBehavior(ctx, profile.MouseDownUpDelay); err != nil {
 			return err
 		}
 		return cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx)
 	})); err != nil {
 		return err
 	}
-	s.setPointer(runtimeSessionID, path[len(path)-1])
 	return nil
+}
+
+func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) (pointerPoint, error) {
+	profile := defaultBehaviorProfile()
+	viewport := viewportRect{Width: 1366, Height: 768}
+	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
+	start := s.pointerStart(runtimeSessionID, viewport)
+	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile)
+	if len(path) == 0 {
+		return pointerPoint{}, ErrInvalidRequest
+	}
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		for _, point := range path {
+			if err := cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx); err != nil {
+				return err
+			}
+			if err := sleepBehavior(ctx, profile.MouseMoveStepDelay); err != nil {
+				return err
+			}
+		}
+		return nil
+	})); err != nil {
+		return pointerPoint{}, err
+	}
+	end := path[len(path)-1]
+	s.setPointer(runtimeSessionID, end)
+	return end, nil
 }
 
 func (s *Service) resolveActRef(ctx context.Context, runtimeSessionID string, ref string) (browserTarget, error) {

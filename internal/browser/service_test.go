@@ -405,6 +405,34 @@ func TestAct_ClickSupportsViewportCoordinates(t *testing.T) {
 	}
 }
 
+func TestAct_HoverUsesTrustedPointerMovement(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, `case "hover":`) || !strings.Contains(text, "trustedMoveTarget") {
+		t.Fatalf("hover must use trusted pointer movement")
+	}
+	if strings.Contains(text, `new MouseEvent("mouseover"`) {
+		t.Fatalf("hover must not synthesize DOM mouse events")
+	}
+}
+
+func TestAct_FillUsesTrustedTextInput(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, `case "fill":`) || !strings.Contains(text, "trustedTextInput(ctx, runtimeSessionID, ActInput") {
+		t.Fatalf("fill must use trusted text input")
+	}
+	if strings.Contains(text, "chromedp.SetValue") {
+		t.Fatalf("fill must not set DOM values directly")
+	}
+}
+
 func TestValidateActionRef_AllowsTextRefForScrollIntoView(t *testing.T) {
 	err := validateActionRef("scrollIntoView", browserrt.RefState{
 		Ref:  "t1",
