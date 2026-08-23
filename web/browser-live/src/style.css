@@ -28,3 +28,53 @@ body,
 #screen canvas {
   outline: none;
 }
+
+#virtual-pointer {
+  --pointer-x: -100px;
+  --pointer-y: -100px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  width: 19px;
+  height: 27px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(var(--pointer-x), var(--pointer-y), 0);
+  transform-origin: 4px 4px;
+  transition:
+    transform 80ms linear,
+    opacity 120ms ease;
+}
+
+#virtual-pointer::before,
+#virtual-pointer::after {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 0;
+  height: 0;
+  content: '';
+}
+
+#virtual-pointer::before {
+  border-top: 21px solid #111;
+  border-right: 14px solid transparent;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 42%));
+}
+
+#virtual-pointer::after {
+  top: 3px;
+  left: 3px;
+  border-top: 14px solid #fff;
+  border-right: 9px solid transparent;
+}
+
+#virtual-pointer[data-visible='true'] {
+  opacity: 0.96;
+}
+
+#virtual-pointer[data-button-down='true'] {
+  transform: translate3d(var(--pointer-x), var(--pointer-y), 0) scale(0.9);
+}
