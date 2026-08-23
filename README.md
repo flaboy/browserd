@@ -194,6 +194,7 @@ Content-Type: application/json
 - `click` / `fill` / `press` / `hover` / `select` / `waitFor` 只接受 `e*`
 - `click` 可不传 `ref`，改传视口坐标 `x` / `y`；坐标点击同样通过 CDP mouse events 执行
 - `click` 通过 CDP mouse events 执行，默认 `motionProfile=humanized` 会先生成 mousemove 轨迹再 press/release
+- live viewer 会显示 browserd 内部虚拟鼠标；虚拟鼠标由 `/act` 的 mousemove/press/release 状态驱动，不修改目标页面 DOM，也不改变 `/v1/sessions/{runtimeSessionId}/act` 的外部请求结构
 - `type` 必须显式指定 `ref`，先聚焦目标，再通过 CDP `Input.insertText` 插入文本；不依赖当前焦点
 - `type` 的 `submit` 为 `true` 时，在同一次 CDP 往返里紧接着按下 Enter。提交表单或触发搜索一律用它，
   不要用 `type` 后再发一次 `press`——两次 `/act` 之间页面可能重渲染并让 `ref` 失效
