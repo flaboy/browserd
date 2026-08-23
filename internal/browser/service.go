@@ -165,7 +165,9 @@ type Service struct {
 
 type pointerState struct {
 	Point       pointerPoint
+	Viewport    viewportRect
 	Initialized bool
+	ButtonDown  bool
 }
 
 type browserTarget struct {
