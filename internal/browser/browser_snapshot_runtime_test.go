@@ -28,3 +28,15 @@ func TestBrowserSnapshotRuntimeExposesHiddenFileInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserSnapshotRuntimeExposesContentEditableInputs(t *testing.T) {
+	for _, marker := range []string{
+		"[contenteditable=\"true\"]",
+		"el.isContentEditable",
+		"el.getAttribute('data-placeholder')",
+	} {
+		if !strings.Contains(browserSnapshotRuntimeScript, marker) {
+			t.Fatalf("snapshot runtime must expose contenteditable editors with marker %q", marker)
+		}
+	}
+}

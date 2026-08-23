@@ -40,6 +40,7 @@ const browserSnapshotRuntimeScript = `(() => {
     const textOf = (el) => normalize(el.innerText || el.textContent || '', 200);
     const nameOf = (el) => normalize(el.getAttribute('aria-label') ||
         el.getAttribute('placeholder') ||
+        el.getAttribute('data-placeholder') ||
         el.getAttribute('title') ||
         el.innerText ||
         el.value ||
@@ -54,6 +55,8 @@ const browserSnapshotRuntimeScript = `(() => {
             return 'inputs';
         if (tag === 'textarea')
             return 'textareas';
+        if (el.isContentEditable || normalize(el.getAttribute('role'), 40) === 'textbox')
+            return 'inputs';
         if (tag === 'select')
             return 'selects';
         if (tag === 'area')
@@ -65,7 +68,7 @@ const browserSnapshotRuntimeScript = `(() => {
     };
     const actionableSeen = new Set();
     const out = [];
-    const actionableNodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,area,summary,[role],[tabindex]'));
+    const actionableNodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,area,summary,[role],[tabindex],[contenteditable="true"]'));
     for (const el of actionableNodes) {
         const tag = el.tagName.toLowerCase();
         const type = normalize(el.getAttribute('type') || '', 80).toLowerCase();
@@ -89,7 +92,7 @@ const browserSnapshotRuntimeScript = `(() => {
             accept: normalize(el.getAttribute('accept') || '', 200),
             href: normalize(el.getAttribute('href') || '', 200),
             value: normalize(el.value || '', 200),
-            placeholder: normalize(el.getAttribute('placeholder') || '', 120),
+            placeholder: normalize(el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '', 120),
             textLength: textOf(el).length
         });
     }
