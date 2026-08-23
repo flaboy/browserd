@@ -22,6 +22,7 @@ import (
 	"browserd/internal/session"
 
 	cdbrowser "github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	cdinput "github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
@@ -1030,10 +1031,12 @@ func (s *Service) writeClipboard(ctx context.Context, text string, html string) 
 	var currentURL string
 	_ = chromedp.Run(ctx, chromedp.Location(&currentURL))
 	if origin := clipboardOrigin(currentURL); origin != "" {
-		_ = cdbrowser.GrantPermissions([]cdbrowser.PermissionType{
-			cdbrowser.PermissionTypeClipboardReadWrite,
-			cdbrowser.PermissionTypeClipboardSanitizedWrite,
-		}).WithOrigin(origin).Do(ctx)
+		if chromeCtx := chromedp.FromContext(ctx); chromeCtx != nil && chromeCtx.Browser != nil {
+			_ = cdbrowser.GrantPermissions([]cdbrowser.PermissionType{
+				cdbrowser.PermissionTypeClipboardReadWrite,
+				cdbrowser.PermissionTypeClipboardSanitizedWrite,
+			}).WithOrigin(origin).Do(cdp.WithExecutor(ctx, chromeCtx.Browser))
+		}
 	}
 	textJSON, err := json.Marshal(text)
 	if err != nil {
