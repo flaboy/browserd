@@ -998,12 +998,24 @@ func (s *Service) trustedPaste(ctx context.Context, runtimeSessionID string, inp
 	if strings.TrimSpace(input.Text) == "" && strings.TrimSpace(input.HTML) == "" {
 		return ErrInvalidRequest
 	}
-	if input.Ref == "" {
+	var target browserTarget
+	if strings.TrimSpace(input.Ref) != "" {
+		resolved, err := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
+		if err != nil {
+			return err
+		}
+		target = resolved
+	} else if input.X > 0 && input.Y > 0 {
+		target = browserTarget{
+			Rect: targetRect{
+				X:      input.X - 0.5,
+				Y:      input.Y - 0.5,
+				Width:  1,
+				Height: 1,
+			},
+		}
+	} else {
 		return ErrInvalidRequest
-	}
-	target, err := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
-	if err != nil {
-		return err
 	}
 	if err := s.trustedClickTarget(ctx, runtimeSessionID, target, input); err != nil {
 		return err

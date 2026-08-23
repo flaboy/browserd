@@ -405,6 +405,19 @@ func TestAct_ClickSupportsViewportCoordinates(t *testing.T) {
 	}
 }
 
+func TestAct_PasteSupportsViewportCoordinates(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, marker := range []string{"func (s *Service) trustedPaste", "input.X > 0 && input.Y > 0", "trustedClickTarget(ctx, runtimeSessionID, target, input)"} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("paste coordinate path missing %q", marker)
+		}
+	}
+}
+
 func TestAct_ScrollUsesTrustedMouseWheel(t *testing.T) {
 	source, err := os.ReadFile("service.go")
 	if err != nil {
