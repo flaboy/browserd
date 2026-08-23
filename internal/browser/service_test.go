@@ -523,6 +523,53 @@ func TestUploadFilesUsesFileChooserFlow(t *testing.T) {
 	}
 }
 
+func TestUploadFilesAllowsDropZoneTextRef(t *testing.T) {
+	state := browserrt.NewState()
+	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{
+		SnapshotID: "snap_1",
+		Refs: map[string]browserrt.RefState{
+			"drop_1": {Ref: "drop_1", Kind: "text", TagName: "div", Selector: "#drop-zone"},
+		},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fmt.Fprint(w, "video-bytes"); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: state})
+	var dropSelector string
+	var dropPaths []string
+	svc.dropFilesOnTarget = func(_ string, selector string, paths []string, _ int) error {
+		dropSelector = selector
+		dropPaths = append([]string(nil), paths...)
+		return nil
+	}
+
+	out, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		Ref: "drop_1",
+		Files: []UploadFileSource{{
+			URL:      server.URL + "/video.mp4",
+			Filename: "video.mp4",
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("UploadFiles returned error: %v", err)
+	}
+	if dropSelector != "#drop-zone" {
+		t.Fatalf("unexpected drop selector: %s", dropSelector)
+	}
+	if len(dropPaths) != 1 || filepath.Base(dropPaths[0]) != "video.mp4" {
+		t.Fatalf("expected materialized video path, got %+v", dropPaths)
+	}
+	if !out.OK || out.Ref != "drop_1" || !reflect.DeepEqual(out.FileNames, []string{"video.mp4"}) {
+		t.Fatalf("unexpected upload output: %+v", out)
+	}
+}
+
 func TestUploadFilesRequiresRef(t *testing.T) {
 	svc := NewServiceWithOptions(ServiceOptions{
 		Sessions: session.NewManager(session.ManagerOptions{

@@ -163,6 +163,7 @@ type Service struct {
 
 	capturePNG         func(context.Context) ([]byte, error)
 	setFileInputFiles  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
+	dropFilesOnTarget  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
 	mu                 sync.Mutex
 	browsers           map[string]*activeBrowser
 	pointers           map[string]pointerState
@@ -237,6 +238,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		pointerSubscribers: map[string]map[chan VirtualPointerSnapshot]struct{}{},
 	}
 	svc.setFileInputFiles = svc.defaultSetFileInputFiles
+	svc.dropFilesOnTarget = svc.defaultDropFilesOnTarget
 	return svc
 }
 
@@ -878,7 +880,8 @@ func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (
 	if err != nil {
 		return UploadFilesOutput{}, err
 	}
-	if refState.Kind != "element" || strings.ToLower(strings.TrimSpace(refState.TagName)) != "input" {
+	isFileInput := refState.Kind == "element" && strings.ToLower(strings.TrimSpace(refState.TagName)) == "input"
+	if !isFileInput && refState.Kind != "text" && refState.Kind != "element" {
 		return UploadFilesOutput{}, browserrt.ErrInvalidRef
 	}
 	info, err := s.sessions.Get(runtimeSessionID)
@@ -899,12 +902,22 @@ func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (
 		filePaths = append(filePaths, path)
 		fileNames = append(fileNames, name)
 	}
-	setter := s.setFileInputFiles
-	if setter == nil {
-		setter = s.defaultSetFileInputFiles
-	}
-	if err := setter(runtimeSessionID, refState.Selector, filePaths, input.TimeoutMs); err != nil {
-		return UploadFilesOutput{}, fmt.Errorf("%w: %v", ErrUploadFilesFailed, err)
+	if isFileInput {
+		setter := s.setFileInputFiles
+		if setter == nil {
+			setter = s.defaultSetFileInputFiles
+		}
+		if err := setter(runtimeSessionID, refState.Selector, filePaths, input.TimeoutMs); err != nil {
+			return UploadFilesOutput{}, fmt.Errorf("%w: %v", ErrUploadFilesFailed, err)
+		}
+	} else {
+		dropper := s.dropFilesOnTarget
+		if dropper == nil {
+			dropper = s.defaultDropFilesOnTarget
+		}
+		if err := dropper(runtimeSessionID, refState.Selector, filePaths, input.TimeoutMs); err != nil {
+			return UploadFilesOutput{}, fmt.Errorf("%w: %v", ErrUploadFilesFailed, err)
+		}
 	}
 	return UploadFilesOutput{OK: true, Ref: ref, FileNames: fileNames}, nil
 }
@@ -1090,6 +1103,37 @@ func (s *Service) defaultSetFileInputFiles(runtimeSessionID string, selector str
 	case <-ctx.Done():
 		return fmt.Errorf("file chooser not opened: %w", ctx.Err())
 	}
+}
+
+func (s *Service) defaultDropFilesOnTarget(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error {
+	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, timeoutMs)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	target, err := queryTargetBySelector(ctx, selector, false)
+	if err != nil {
+		return err
+	}
+	point, _, err := s.trustedMoveTarget(ctx, runtimeSessionID, target, ActInput{TimeoutMs: timeoutMs})
+	if err != nil {
+		return err
+	}
+	data := &cdinput.DragData{
+		Items:              []*cdinput.DragDataItem{},
+		Files:              filePaths,
+		DragOperationsMask: 1,
+	}
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := cdinput.DispatchDragEvent(cdinput.DragEnter, point.X, point.Y, data).Do(ctx); err != nil {
+			return err
+		}
+		if err := cdinput.DispatchDragEvent(cdinput.DragOver, point.X, point.Y, data).Do(ctx); err != nil {
+			return err
+		}
+		return cdinput.DispatchDragEvent(cdinput.Drop, point.X, point.Y, data).Do(ctx)
+	}))
 }
 
 func pageGroupsToState(groups map[string]PageTable) map[string]any {
