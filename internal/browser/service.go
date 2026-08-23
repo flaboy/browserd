@@ -662,7 +662,7 @@ func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string
 		return pointerPoint{}, err
 	}
 	end := path[len(path)-1]
-	s.setPointer(runtimeSessionID, end)
+	s.setPointer(runtimeSessionID, end, viewport)
 	return end, nil
 }
 
@@ -718,10 +718,25 @@ func (s *Service) pointerStart(runtimeSessionID string, viewport viewportRect) p
 	return pointerPoint{X: viewport.Width * 0.35, Y: viewport.Height * 0.35}
 }
 
-func (s *Service) setPointer(runtimeSessionID string, point pointerPoint) {
+func (s *Service) PointerSnapshot(runtimeSessionID string) (VirtualPointerSnapshot, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pointers[runtimeSessionID] = pointerState{Point: point, Initialized: true}
+
+	state, ok := s.pointers[runtimeSessionID]
+	if !ok || !state.Initialized {
+		return VirtualPointerSnapshot{Visible: false}, false
+	}
+	return newVirtualPointerSnapshot(runtimeSessionID, state), true
+}
+
+func (s *Service) setPointer(runtimeSessionID string, point pointerPoint, viewport viewportRect) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pointers[runtimeSessionID] = pointerState{
+		Point:       point,
+		Viewport:    viewport,
+		Initialized: true,
+	}
 }
 
 func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (UploadFilesOutput, error) {

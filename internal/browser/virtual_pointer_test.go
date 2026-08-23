@@ -25,3 +25,20 @@ func TestVirtualPointerSnapshotIsSanitized(t *testing.T) {
 		t.Fatalf("expected visible button-down pointer: %+v", got)
 	}
 }
+
+func TestPointerSnapshotReturnsLatestVirtualPointer(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{})
+	svc.setPointer("rt_1", pointerPoint{X: 10, Y: 20}, viewportRect{Width: 100, Height: 80})
+
+	got, ok := svc.PointerSnapshot("rt_1")
+
+	if !ok {
+		t.Fatal("expected pointer snapshot")
+	}
+	if got.X != 10 || got.Y != 20 || got.ViewportWidth != 100 || got.ViewportHeight != 80 {
+		t.Fatalf("unexpected snapshot: %+v", got)
+	}
+	if !got.Visible {
+		t.Fatalf("expected visible pointer: %+v", got)
+	}
+}
