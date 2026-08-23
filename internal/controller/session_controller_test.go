@@ -948,6 +948,8 @@ func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{
 		"ref":"file_1",
+		"x":321.5,
+		"y":222.25,
 		"files":[
 			{"s3Path":"s3://browserd-assets/team_1/cover.png","filename":"cover.png"},
 			{"url":"https://cdn.example.test/team_1/gallery.png","filename":"gallery.png"}
@@ -964,7 +966,7 @@ func TestUploadFiles_ForwardsControlledSources(t *testing.T) {
 		t.Fatalf("expected one upload call, got %d", len(browserRuntime.uploadCalls))
 	}
 	call := browserRuntime.uploadCalls[0]
-	if call.Ref != "file_1" || call.TimeoutMs != 1000 || len(call.Files) != 2 {
+	if call.Ref != "file_1" || call.X != 321.5 || call.Y != 222.25 || call.TimeoutMs != 1000 || len(call.Files) != 2 {
 		t.Fatalf("unexpected upload call: %+v", call)
 	}
 	if call.Files[0].S3Path != "s3://browserd-assets/team_1/cover.png" || call.Files[0].Filename != "cover.png" {

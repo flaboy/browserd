@@ -167,6 +167,8 @@ type uploadFileSourceRequest struct {
 
 type uploadFilesRequest struct {
 	Ref       string                    `json:"ref"`
+	X         float64                   `json:"x,omitempty"`
+	Y         float64                   `json:"y,omitempty"`
 	Files     []uploadFileSourceRequest `json:"files"`
 	TimeoutMs int                       `json:"timeoutMs,omitempty"`
 }
@@ -444,6 +446,8 @@ func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, 
 	}
 	out, err := h.browser.UploadFiles(runtimeSessionID, browser.UploadFilesInput{
 		Ref:       req.Ref,
+		X:         req.X,
+		Y:         req.Y,
 		Files:     files,
 		TimeoutMs: req.TimeoutMs,
 	})

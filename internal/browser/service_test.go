@@ -587,6 +587,49 @@ func TestUploadFilesRequiresRef(t *testing.T) {
 	}
 }
 
+func TestUploadFilesAllowsPointTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fmt.Fprint(w, "upload-by-point"); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+	sessionRoot := filepath.Join(t.TempDir(), "sessions", "rt_upload")
+	manager := fakeUploadSessionManager{info: session.SessionInfo{RuntimeSessionID: "rt_upload", ProfileDir: filepath.Join(sessionRoot, "profile")}}
+	svc := NewServiceWithOptions(ServiceOptions{Sessions: manager, State: browserrt.NewState()})
+	var gotX float64
+	var gotY float64
+	var gotPaths []string
+	svc.setFilesAtPoint = func(_ string, x float64, y float64, paths []string, _ int) error {
+		gotX = x
+		gotY = y
+		gotPaths = append([]string(nil), paths...)
+		return nil
+	}
+
+	out, err := svc.UploadFiles("rt_upload", UploadFilesInput{
+		X: 212.5,
+		Y: 144.25,
+		Files: []UploadFileSource{{
+			URL:      server.URL + "/note.txt",
+			Filename: "note.txt",
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("UploadFiles returned error: %v", err)
+	}
+	if gotX != 212.5 || gotY != 144.25 {
+		t.Fatalf("unexpected point: x=%v y=%v", gotX, gotY)
+	}
+	if len(gotPaths) != 1 || filepath.Base(gotPaths[0]) != "note.txt" {
+		t.Fatalf("expected materialized file path, got %+v", gotPaths)
+	}
+	if !out.OK || out.Ref != "" || !reflect.DeepEqual(out.FileNames, []string{"note.txt"}) {
+		t.Fatalf("unexpected upload output: %+v", out)
+	}
+}
+
 func TestUploadFilesDownloadsS3FileAndSetsInput(t *testing.T) {
 	state := browserrt.NewState()
 	state.ReplaceSnapshot("rt_upload", browserrt.SnapshotState{

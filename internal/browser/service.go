@@ -132,6 +132,8 @@ type UploadFileSource struct {
 
 type UploadFilesInput struct {
 	Ref       string             `json:"ref"`
+	X         float64            `json:"x,omitempty"`
+	Y         float64            `json:"y,omitempty"`
 	Files     []UploadFileSource `json:"files"`
 	TimeoutMs int                `json:"timeoutMs,omitempty"`
 }
@@ -163,6 +165,7 @@ type Service struct {
 
 	capturePNG         func(context.Context) ([]byte, error)
 	setFileInputFiles  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
+	setFilesAtPoint    func(runtimeSessionID string, x float64, y float64, filePaths []string, timeoutMs int) error
 	dropFilesOnTarget  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
 	mu                 sync.Mutex
 	browsers           map[string]*activeBrowser
@@ -238,6 +241,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		pointerSubscribers: map[string]map[chan VirtualPointerSnapshot]struct{}{},
 	}
 	svc.setFileInputFiles = svc.defaultSetFileInputFiles
+	svc.setFilesAtPoint = svc.defaultSetFilesAtPoint
 	svc.dropFilesOnTarget = svc.defaultDropFilesOnTarget
 	return svc
 }
@@ -870,19 +874,25 @@ func (s *Service) setPointerButton(runtimeSessionID string, point pointerPoint, 
 
 func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (UploadFilesOutput, error) {
 	ref := strings.TrimSpace(input.Ref)
-	if ref == "" || len(input.Files) == 0 {
+	hasPoint := input.X > 0 && input.Y > 0
+	if (ref == "" && !hasPoint) || len(input.Files) == 0 {
 		return UploadFilesOutput{}, ErrInvalidRequest
 	}
 	if s.sessions == nil || s.state == nil {
 		return UploadFilesOutput{}, ErrInvalidRequest
 	}
-	refState, err := s.state.GetRef(runtimeSessionID, ref)
-	if err != nil {
-		return UploadFilesOutput{}, err
-	}
-	isFileInput := refState.Kind == "element" && strings.ToLower(strings.TrimSpace(refState.TagName)) == "input"
-	if !isFileInput && refState.Kind != "text" && refState.Kind != "element" {
-		return UploadFilesOutput{}, browserrt.ErrInvalidRef
+	var refState browserrt.RefState
+	isFileInput := false
+	if ref != "" {
+		var err error
+		refState, err = s.state.GetRef(runtimeSessionID, ref)
+		if err != nil {
+			return UploadFilesOutput{}, err
+		}
+		isFileInput = refState.Kind == "element" && strings.ToLower(strings.TrimSpace(refState.TagName)) == "input"
+		if !isFileInput && refState.Kind != "text" && refState.Kind != "element" {
+			return UploadFilesOutput{}, browserrt.ErrInvalidRef
+		}
 	}
 	info, err := s.sessions.Get(runtimeSessionID)
 	if err != nil {
@@ -902,7 +912,15 @@ func (s *Service) UploadFiles(runtimeSessionID string, input UploadFilesInput) (
 		filePaths = append(filePaths, path)
 		fileNames = append(fileNames, name)
 	}
-	if isFileInput {
+	if ref == "" {
+		setter := s.setFilesAtPoint
+		if setter == nil {
+			setter = s.defaultSetFilesAtPoint
+		}
+		if err := setter(runtimeSessionID, input.X, input.Y, filePaths, input.TimeoutMs); err != nil {
+			return UploadFilesOutput{}, fmt.Errorf("%w: %v", ErrUploadFilesFailed, err)
+		}
+	} else if isFileInput {
 		setter := s.setFileInputFiles
 		if setter == nil {
 			setter = s.defaultSetFileInputFiles
@@ -1092,6 +1110,48 @@ func (s *Service) defaultSetFileInputFiles(runtimeSessionID string, selector str
 	}()
 
 	if err := s.trustedClick(ctx, runtimeSessionID, selector, ActInput{TimeoutMs: timeoutMs}); err != nil {
+		return fmt.Errorf("open file chooser: %w", err)
+	}
+	select {
+	case chooser := <-chooserCh:
+		if chooser.BackendNodeID == 0 {
+			return errors.New("file chooser opened without backend node")
+		}
+		return chromedp.Run(ctx, dom.SetFileInputFiles(filePaths).WithBackendNodeID(chooser.BackendNodeID))
+	case <-ctx.Done():
+		return fmt.Errorf("file chooser not opened: %w", ctx.Err())
+	}
+}
+
+func (s *Service) defaultSetFilesAtPoint(runtimeSessionID string, x float64, y float64, filePaths []string, timeoutMs int) error {
+	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, timeoutMs)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	chooserCh := make(chan *page.EventFileChooserOpened, 1)
+	listenCtx, stopListening := context.WithCancel(ctx)
+	defer stopListening()
+	chromedp.ListenTarget(listenCtx, func(ev any) {
+		chooser, ok := ev.(*page.EventFileChooserOpened)
+		if !ok {
+			return
+		}
+		select {
+		case chooserCh <- chooser:
+		default:
+		}
+	})
+
+	if err := chromedp.Run(ctx, page.SetInterceptFileChooserDialog(true)); err != nil {
+		return err
+	}
+	defer func() {
+		_ = chromedp.Run(ctx, page.SetInterceptFileChooserDialog(false))
+	}()
+
+	if err := s.trustedClickPoint(ctx, runtimeSessionID, ActInput{X: x, Y: y, TimeoutMs: timeoutMs}); err != nil {
 		return fmt.Errorf("open file chooser: %w", err)
 	}
 	select {
