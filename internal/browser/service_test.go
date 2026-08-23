@@ -502,6 +502,27 @@ func TestUploadAfterNavigate_ReturnsCaptureError(t *testing.T) {
 	}
 }
 
+func TestUploadFilesUsesFileChooserFlow(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, marker := range []string{
+		"page.SetInterceptFileChooserDialog(true)",
+		"*page.EventFileChooserOpened",
+		"dom.SetFileInputFiles(filePaths).WithBackendNodeID",
+		"trustedClick(ctx, runtimeSessionID, selector",
+	} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("default upload must use file chooser flow, missing %q", marker)
+		}
+	}
+	if strings.Contains(text, "chromedp.SetUploadFiles(selector") {
+		t.Fatalf("default upload must not rely on direct SetUploadFiles selector injection")
+	}
+}
+
 func TestUploadFilesRequiresRef(t *testing.T) {
 	svc := NewServiceWithOptions(ServiceOptions{
 		Sessions: session.NewManager(session.ManagerOptions{

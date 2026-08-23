@@ -21,7 +21,9 @@ import (
 	browserrt "browserd/internal/runtime"
 	"browserd/internal/session"
 
+	"github.com/chromedp/cdproto/dom"
 	cdinput "github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/gobwas/ws"
@@ -1054,7 +1056,40 @@ func (s *Service) defaultSetFileInputFiles(runtimeSessionID string, selector str
 		return err
 	}
 	defer cancel()
-	return chromedp.Run(ctx, chromedp.SetUploadFiles(selector, filePaths, chromedp.ByQuery))
+
+	chooserCh := make(chan *page.EventFileChooserOpened, 1)
+	listenCtx, stopListening := context.WithCancel(ctx)
+	defer stopListening()
+	chromedp.ListenTarget(listenCtx, func(ev any) {
+		chooser, ok := ev.(*page.EventFileChooserOpened)
+		if !ok {
+			return
+		}
+		select {
+		case chooserCh <- chooser:
+		default:
+		}
+	})
+
+	if err := chromedp.Run(ctx, page.SetInterceptFileChooserDialog(true)); err != nil {
+		return err
+	}
+	defer func() {
+		_ = chromedp.Run(ctx, page.SetInterceptFileChooserDialog(false))
+	}()
+
+	if err := s.trustedClick(ctx, runtimeSessionID, selector, ActInput{TimeoutMs: timeoutMs}); err != nil {
+		return fmt.Errorf("open file chooser: %w", err)
+	}
+	select {
+	case chooser := <-chooserCh:
+		if chooser.BackendNodeID == 0 {
+			return errors.New("file chooser opened without backend node")
+		}
+		return chromedp.Run(ctx, dom.SetFileInputFiles(filePaths).WithBackendNodeID(chooser.BackendNodeID))
+	case <-ctx.Done():
+		return fmt.Errorf("file chooser not opened: %w", ctx.Err())
+	}
 }
 
 func pageGroupsToState(groups map[string]PageTable) map[string]any {
