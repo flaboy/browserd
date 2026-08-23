@@ -21,28 +21,30 @@ import (
 )
 
 type fakeBrowserRuntime struct {
-	prepareErr    error
-	prepareCalls  []string
-	closeCalls    []string
-	navigateCalls []browser.NavigateInput
-	navigateOut   browser.NavigateOutput
-	navigateErr   error
-	snapshotOut   browser.SnapshotOutput
-	snapshotErr   error
-	actCalls      []browser.ActInput
-	actOut        browser.ActOutput
-	actErr        error
-	screenshotOut browser.ScreenshotOutput
-	screenshotErr error
-	uploadCalls   []browser.UploadFilesInput
-	uploadOut     browser.UploadFilesOutput
-	uploadErr     error
-	evaluateCalls []browser.EvaluateInput
-	evaluateOut   browser.EvaluateOutput
-	evaluateErr   error
-	pointerSub    browser.PointerSubscription
-	pointerErr    error
-	pointerCalls  []string
+	prepareErr      error
+	prepareCalls    []string
+	checkpointErr   error
+	checkpointCalls []string
+	closeCalls      []string
+	navigateCalls   []browser.NavigateInput
+	navigateOut     browser.NavigateOutput
+	navigateErr     error
+	snapshotOut     browser.SnapshotOutput
+	snapshotErr     error
+	actCalls        []browser.ActInput
+	actOut          browser.ActOutput
+	actErr          error
+	screenshotOut   browser.ScreenshotOutput
+	screenshotErr   error
+	uploadCalls     []browser.UploadFilesInput
+	uploadOut       browser.UploadFilesOutput
+	uploadErr       error
+	evaluateCalls   []browser.EvaluateInput
+	evaluateOut     browser.EvaluateOutput
+	evaluateErr     error
+	pointerSub      browser.PointerSubscription
+	pointerErr      error
+	pointerCalls    []string
 }
 
 type fakeLiveProxyBrowserRuntime struct {
@@ -63,6 +65,11 @@ func (f *fakeLiveProxyBrowserRuntime) LiveProxyTarget(_ string) (string, error) 
 func (f *fakeBrowserRuntime) PrepareSession(runtimeSessionID string) error {
 	f.prepareCalls = append(f.prepareCalls, runtimeSessionID)
 	return f.prepareErr
+}
+
+func (f *fakeBrowserRuntime) Checkpoint(runtimeSessionID string) error {
+	f.checkpointCalls = append(f.checkpointCalls, runtimeSessionID)
+	return f.checkpointErr
 }
 
 func (f *fakeBrowserRuntime) Close(runtimeSessionID string) error {
@@ -107,6 +114,9 @@ type fakeSessionManager struct {
 	createOut   session.CreateOutput
 	createErr   error
 	createCalls []session.CreateInput
+	commitCalls []session.CommitInput
+	commitOut   session.CommitOutput
+	commitErr   error
 	deleteCalls []string
 	deleteErr   error
 }
@@ -116,8 +126,12 @@ func (f *fakeSessionManager) Create(input session.CreateInput) (session.CreateOu
 	return f.createOut, f.createErr
 }
 
-func (f *fakeSessionManager) Commit(_ string, _ session.CommitInput) (session.CommitOutput, error) {
-	return session.CommitOutput{}, errors.New("not implemented")
+func (f *fakeSessionManager) Commit(_ string, input session.CommitInput) (session.CommitOutput, error) {
+	f.commitCalls = append(f.commitCalls, input)
+	if f.commitErr != nil {
+		return session.CommitOutput{}, f.commitErr
+	}
+	return f.commitOut, nil
 }
 
 func (f *fakeSessionManager) Delete(runtimeSessionID string) error {
@@ -515,6 +529,30 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	handler.CommitSession(rr, req, rid)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCommitSession_DoesNotCommitWhenCheckpointFails(t *testing.T) {
+	manager := &fakeSessionManager{commitOut: session.CommitOutput{NewVersion: "v2"}}
+	browserRuntime := &fakeBrowserRuntime{checkpointErr: browser.ErrProfileCheckpointFailed}
+	handler := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/commit", bytes.NewReader([]byte(`{"ifMatchVersion":"v1"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CommitSession(rr, req, "rt_1")
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "PROFILE_CHECKPOINT_FAILED") {
+		t.Fatalf("expected checkpoint error response, got %s", rr.Body.String())
+	}
+	if len(browserRuntime.checkpointCalls) != 1 || browserRuntime.checkpointCalls[0] != "rt_1" {
+		t.Fatalf("expected checkpoint call, got %+v", browserRuntime.checkpointCalls)
+	}
+	if len(manager.commitCalls) != 0 {
+		t.Fatalf("manager commit must not run after checkpoint failure, got %+v", manager.commitCalls)
 	}
 }
 

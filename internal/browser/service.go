@@ -24,6 +24,8 @@ import (
 	cdinput "github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 )
 
 var (
@@ -37,6 +39,7 @@ var (
 	ErrScreenshotFailed        = errors.New("screenshot failed")
 	ErrPlaywrightUnavailable   = errors.New("playwright not available")
 	ErrProxyHopFailed          = errors.New("proxy hop failed")
+	ErrProfileCheckpointFailed = errors.New("profile checkpoint failed")
 )
 
 type NavigateInput struct {
@@ -241,12 +244,40 @@ func (s *Service) PrepareSession(runtimeSessionID string) error {
 }
 
 func (s *Service) Close(runtimeSessionID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	b, ok := s.browsers[runtimeSessionID]
+	b, ok := s.removeActiveBrowser(runtimeSessionID)
 	if !ok {
 		return nil
+	}
+	if b.cmd != nil && b.cmd.Process != nil {
+		_ = b.cmd.Process.Kill()
+		_, _ = b.cmd.Process.Wait()
+	}
+	s.cleanupActiveBrowser(b)
+	return nil
+}
+
+func (s *Service) Checkpoint(runtimeSessionID string) error {
+	s.mu.Lock()
+	b, ok := s.browsers[runtimeSessionID]
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if err := s.closeBrowserGracefully(b, 15*time.Second); err != nil {
+		return fmt.Errorf("%w: %v", ErrProfileCheckpointFailed, err)
+	}
+	if removed, ok := s.removeActiveBrowser(runtimeSessionID); ok {
+		s.cleanupActiveBrowser(removed)
+	}
+	return nil
+}
+
+func (s *Service) removeActiveBrowser(runtimeSessionID string) (*activeBrowser, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.browsers[runtimeSessionID]
+	if !ok {
+		return nil, false
 	}
 	delete(s.browsers, runtimeSessionID)
 	delete(s.pointers, runtimeSessionID)
@@ -254,10 +285,10 @@ func (s *Service) Close(runtimeSessionID string) error {
 		close(ch)
 	}
 	delete(s.pointerSubscribers, runtimeSessionID)
-	if b.cmd != nil && b.cmd.Process != nil {
-		_ = b.cmd.Process.Kill()
-		_, _ = b.cmd.Process.Wait()
-	}
+	return b, true
+}
+
+func (s *Service) cleanupActiveBrowser(b *activeBrowser) {
 	if b.live != nil {
 		_ = b.live.Stop(context.Background())
 	}
@@ -273,7 +304,50 @@ func (s *Service) Close(runtimeSessionID string) error {
 	if b.proxyAdapter != nil {
 		_ = b.proxyAdapter.Close()
 	}
-	return nil
+}
+
+func (s *Service) closeBrowserGracefully(b *activeBrowser, timeout time.Duration) error {
+	if b == nil || strings.TrimSpace(b.wsURL) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, _, _, err := ws.Dial(ctx, b.wsURL)
+	if err != nil {
+		if b.cmd != nil && b.cmd.Process != nil {
+			return waitChromeProcessExit(ctx, b.cmd)
+		}
+		return err
+	}
+	if err := wsutil.WriteClientText(conn, []byte(`{"id":1,"method":"Browser.close"}`)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	_ = conn.Close()
+	return waitChromeProcessExit(ctx, b.cmd)
+}
+
+func waitChromeProcessExit(ctx context.Context, cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return nil
+			}
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) LiveProxyTarget(runtimeSessionID string) (string, error) {

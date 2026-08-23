@@ -37,6 +37,7 @@ type SessionController struct {
 
 type browserRuntime interface {
 	PrepareSession(runtimeSessionID string) error
+	Checkpoint(runtimeSessionID string) error
 	Close(runtimeSessionID string) error
 	Navigate(runtimeSessionID string, input browser.NavigateInput) (browser.NavigateOutput, error)
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
@@ -268,7 +269,10 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if h.browser != nil {
-		_ = h.browser.Close(runtimeSessionID)
+		if err := h.browser.Checkpoint(runtimeSessionID); err != nil {
+			types.WriteErr(w, http.StatusServiceUnavailable, "PROFILE_CHECKPOINT_FAILED", err.Error())
+			return
+		}
 	}
 	h.revokeRuntimeSession(runtimeSessionID)
 	out, err := h.manager.Commit(runtimeSessionID, session.CommitInput{
