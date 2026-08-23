@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -43,6 +44,10 @@ type browserRuntime interface {
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
 	UploadFiles(runtimeSessionID string, input browser.UploadFilesInput) (browser.UploadFilesOutput, error)
 	Evaluate(runtimeSessionID string, input browser.EvaluateInput) (browser.EvaluateOutput, error)
+}
+
+type browserPointerRuntime interface {
+	SubscribePointer(runtimeSessionID string) (browser.PointerSubscription, error)
 }
 
 type browserLiveProxyRuntime interface {
@@ -555,6 +560,48 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 		return
 	}
 	types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", "live proxy runtime is not configured")
+}
+
+func (h *SessionController) ServePointerEvents(w http.ResponseWriter, r *http.Request, token string) {
+	state, ok := h.tokenStore.Lookup(token)
+	if !ok {
+		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
+		return
+	}
+	runtime, ok := h.browser.(browserPointerRuntime)
+	if !ok {
+		types.WriteErr(w, http.StatusServiceUnavailable, "POINTER_STREAM_NOT_AVAILABLE", "browser runtime does not expose pointer events")
+		return
+	}
+	sub, err := runtime.SubscribePointer(state.RuntimeSessionID)
+	if err != nil {
+		writeBrowserErr(w, err)
+		return
+	}
+	defer sub.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := w.(http.Flusher)
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case snapshot, ok := <-sub.C:
+			if !ok {
+				return
+			}
+			payload, err := json.Marshal(snapshot)
+			if err != nil {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "event: pointer\ndata: %s\n\n", payload)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
 }
 
 func (h *SessionController) isWebsockifyRequest(r *http.Request, token string) bool {

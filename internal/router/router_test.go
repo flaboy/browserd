@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -70,5 +71,18 @@ func TestNew_RoutesUploadFiles(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "NOT_FOUND") {
 		t.Fatalf("upload-files route returned not found: %s", rr.Body.String())
+	}
+}
+
+func TestRouterRoutesPointerEventsBeforeGenericLiveView(t *testing.T) {
+	source, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	pointerIndex := strings.Index(text, "/pointer-events")
+	liveIndex := strings.Index(text, "handler.ServeLiveView")
+	if pointerIndex < 0 || liveIndex < 0 || pointerIndex > liveIndex {
+		t.Fatalf("pointer-events route must be checked before generic live-view route")
 	}
 }

@@ -436,7 +436,7 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 		if refErr != nil {
 			return ActOutput{}, refErr
 		}
-		_, err = s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
+		_, _, err = s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
 	case "type":
 		err = s.trustedTextInput(ctx, runtimeSessionID, input)
 	case "fill":
@@ -613,7 +613,7 @@ func (s *Service) trustedClickPoint(ctx context.Context, runtimeSessionID string
 
 func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) error {
 	profile := defaultBehaviorProfile()
-	end, err := s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
+	end, viewport, err := s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
 	if err != nil {
 		return err
 	}
@@ -635,24 +635,29 @@ func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID strin
 		if err := cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
 			return err
 		}
+		s.setPointerButton(runtimeSessionID, end, viewport, true)
 		if err := sleepBehavior(ctx, profile.MouseDownUpDelay); err != nil {
 			return err
 		}
-		return cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx)
+		if err := cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
+			return err
+		}
+		s.setPointerButton(runtimeSessionID, end, viewport, false)
+		return nil
 	})); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) (pointerPoint, error) {
+func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) (pointerPoint, viewportRect, error) {
 	profile := defaultBehaviorProfile()
 	viewport := viewportRect{Width: 1366, Height: 768}
 	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
 	start := s.pointerStart(runtimeSessionID, viewport)
 	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile)
 	if len(path) == 0 {
-		return pointerPoint{}, ErrInvalidRequest
+		return pointerPoint{}, viewportRect{}, ErrInvalidRequest
 	}
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		for _, point := range path {
@@ -665,11 +670,11 @@ func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string
 		}
 		return nil
 	})); err != nil {
-		return pointerPoint{}, err
+		return pointerPoint{}, viewportRect{}, err
 	}
 	end := path[len(path)-1]
 	s.setPointer(runtimeSessionID, end, viewport)
-	return end, nil
+	return end, viewport, nil
 }
 
 func (s *Service) resolveActRef(ctx context.Context, runtimeSessionID string, ref string) (browserTarget, error) {
@@ -751,7 +756,7 @@ func (s *Service) SubscribePointer(runtimeSessionID string) (PointerSubscription
 	s.mu.Unlock()
 	return PointerSubscription{
 		C: ch,
-		close: func() {
+		Cancel: func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if _, ok := s.pointerSubscribers[runtimeSessionID][ch]; ok {
@@ -763,12 +768,17 @@ func (s *Service) SubscribePointer(runtimeSessionID string) (PointerSubscription
 }
 
 func (s *Service) setPointer(runtimeSessionID string, point pointerPoint, viewport viewportRect) {
+	s.setPointerButton(runtimeSessionID, point, viewport, false)
+}
+
+func (s *Service) setPointerButton(runtimeSessionID string, point pointerPoint, viewport viewportRect, buttonDown bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := pointerState{
 		Point:       point,
 		Viewport:    viewport,
 		Initialized: true,
+		ButtonDown:  buttonDown,
 	}
 	s.pointers[runtimeSessionID] = state
 	snapshot := newVirtualPointerSnapshot(runtimeSessionID, state)

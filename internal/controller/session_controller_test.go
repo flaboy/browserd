@@ -40,6 +40,9 @@ type fakeBrowserRuntime struct {
 	evaluateCalls []browser.EvaluateInput
 	evaluateOut   browser.EvaluateOutput
 	evaluateErr   error
+	pointerSub    browser.PointerSubscription
+	pointerErr    error
+	pointerCalls  []string
 }
 
 type fakeLiveProxyBrowserRuntime struct {
@@ -93,6 +96,11 @@ func (f *fakeBrowserRuntime) UploadFiles(_ string, input browser.UploadFilesInpu
 func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (browser.EvaluateOutput, error) {
 	f.evaluateCalls = append(f.evaluateCalls, input)
 	return f.evaluateOut, f.evaluateErr
+}
+
+func (f *fakeBrowserRuntime) SubscribePointer(runtimeSessionID string) (browser.PointerSubscription, error) {
+	f.pointerCalls = append(f.pointerCalls, runtimeSessionID)
+	return f.pointerSub, f.pointerErr
 }
 
 type fakeSessionManager struct {
@@ -686,6 +694,78 @@ func TestLiveView_ReturnsViewOnlyViewerURL(t *testing.T) {
 	}
 }
 
+func TestServePointerEventsRequiresValidLiveToken(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:     manager,
+		Browser:     &fakeBrowserRuntime{},
+		LiveBaseURL: "https://browser.example",
+		TokenStore:  live.NewTokenStore(live.TokenStoreOptions{}),
+	})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v/bad-token/pointer-events", nil)
+
+	handler.ServePointerEvents(rr, req, "bad-token")
+
+	if rr.Code != http.StatusGone {
+		t.Fatalf("expected invalid token to fail, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestServePointerEventsStreamsSanitizedSnapshots(t *testing.T) {
+	store := live.NewTokenStore(live.TokenStoreOptions{})
+	token, _, err := store.Issue(live.IssueRequest{
+		RuntimeSessionID: "rt_1",
+		HandoffID:        "lv_1",
+		Permission:       live.PermissionView,
+		TTL:              time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserRuntime := &fakeBrowserRuntime{
+		pointerSub: browser.PointerSubscription{
+			C: closedPointerChannel(browser.VirtualPointerSnapshot{
+				X: 1, Y: 2, ViewportWidth: 100, ViewportHeight: 80, Visible: true,
+			}),
+			Cancel: func() {},
+		},
+	}
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:     manager,
+		Browser:     browserRuntime,
+		LiveBaseURL: "https://browser.example",
+		TokenStore:  store,
+	})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/pointer-events", nil)
+
+	handler.ServePointerEvents(rr, req, token)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected stream response, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "event: pointer") || !strings.Contains(body, `"visible":true`) {
+		t.Fatalf("expected pointer SSE body, got %s", body)
+	}
+	if strings.Contains(body, "rt_1") {
+		t.Fatalf("pointer stream must not expose runtime session id: %s", body)
+	}
+	if len(browserRuntime.pointerCalls) != 1 || browserRuntime.pointerCalls[0] != "rt_1" {
+		t.Fatalf("expected pointer subscription for rt_1, got %+v", browserRuntime.pointerCalls)
+	}
+}
+
 func TestEvaluate_ReturnsJSONResult(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
@@ -1254,6 +1334,13 @@ func navigateStatus(handler *controller.SessionController, rid string) int {
 	rr := httptest.NewRecorder()
 	handler.Navigate(rr, req, rid)
 	return rr.Code
+}
+
+func closedPointerChannel(snapshot browser.VirtualPointerSnapshot) <-chan browser.VirtualPointerSnapshot {
+	ch := make(chan browser.VirtualPointerSnapshot, 1)
+	ch <- snapshot
+	close(ch)
+	return ch
 }
 
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {

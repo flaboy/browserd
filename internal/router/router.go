@@ -89,6 +89,14 @@ func New(cfg config.Config) http.Handler {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			liveViewerAssets.ServeHTTP(w, r)
 			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, noVNCBasePath+"/") && strings.HasSuffix(r.URL.Path, "/pointer-events"):
+			token := extractLiveViewToken(r.URL.Path, noVNCBasePath)
+			if token == "" {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "missing live view token")
+				return
+			}
+			handler.ServePointerEvents(w, r, token)
+			return
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, noVNCBasePath+"/"):
 			token := extractLiveViewToken(r.URL.Path, noVNCBasePath)
 			if token == "" {

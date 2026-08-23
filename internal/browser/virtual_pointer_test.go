@@ -62,3 +62,23 @@ func TestPointerSubscriptionReceivesMovementSnapshots(t *testing.T) {
 		t.Fatal("expected pointer snapshot to be delivered")
 	}
 }
+
+func TestPointerSubscriptionReceivesButtonDownSnapshots(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{})
+	sub, err := svc.SubscribePointer("rt_1")
+	if err != nil {
+		t.Fatalf("subscribe pointer: %v", err)
+	}
+	defer sub.Close()
+
+	svc.setPointerButton("rt_1", pointerPoint{X: 11, Y: 22}, viewportRect{Width: 100, Height: 80}, true)
+
+	select {
+	case got := <-sub.C:
+		if !got.ButtonDown {
+			t.Fatalf("expected button-down snapshot: %+v", got)
+		}
+	default:
+		t.Fatal("expected pointer snapshot to be delivered")
+	}
+}

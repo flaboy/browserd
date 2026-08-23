@@ -14,13 +14,13 @@ type VirtualPointerSnapshot struct {
 }
 
 type PointerSubscription struct {
-	C     <-chan VirtualPointerSnapshot
-	close func()
+	C      <-chan VirtualPointerSnapshot
+	Cancel func()
 }
 
 func (s PointerSubscription) Close() {
-	if s.close != nil {
-		s.close()
+	if s.Cancel != nil {
+		s.Cancel()
 	}
 }
 
