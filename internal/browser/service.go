@@ -1022,6 +1022,9 @@ func (s *Service) trustedPaste(ctx context.Context, runtimeSessionID string, inp
 		}
 	}
 	if err := s.writeClipboard(ctx, input.Text, input.HTML); err != nil {
+		if strings.TrimSpace(input.HTML) == "" && strings.TrimSpace(input.Text) != "" {
+			return trustedInsertText(ctx, input.Text)
+		}
 		return err
 	}
 	return keyEventAction(textInputKey{Key: "v", Modifiers: cdinput.ModifierCtrl}).Do(ctx)
@@ -1064,6 +1067,24 @@ func (s *Service) writeClipboard(ctx context.Context, text string, html string) 
 	var ok bool
 	return chromedp.Run(ctx, chromedp.Evaluate(script, &ok, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 		return p.WithAwaitPromise(true)
+	}))
+}
+
+func trustedInsertText(ctx context.Context, text string) error {
+	profile := defaultBehaviorProfile()
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		parts := splitTextRunes(text)
+		for index, part := range parts {
+			if err := cdinput.InsertText(part).Do(ctx); err != nil {
+				return err
+			}
+			if index < len(parts)-1 {
+				if err := sleepBehavior(ctx, profile.TypeRuneDelay); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}))
 }
 
