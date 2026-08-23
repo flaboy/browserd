@@ -42,6 +42,7 @@ type browserRuntime interface {
 	Navigate(runtimeSessionID string, input browser.NavigateInput) (browser.NavigateOutput, error)
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
 	Act(runtimeSessionID string, input browser.ActInput) (browser.ActOutput, error)
+	WaitFor(runtimeSessionID string, input browser.WaitForInput) (browser.WaitForOutput, error)
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
 	UploadFiles(runtimeSessionID string, input browser.UploadFilesInput) (browser.UploadFilesOutput, error)
 	Evaluate(runtimeSessionID string, input browser.EvaluateInput) (browser.EvaluateOutput, error)
@@ -152,6 +153,13 @@ type actRequest struct {
 	ClickCount    int             `json:"clickCount,omitempty"`
 	MotionProfile string          `json:"motionProfile,omitempty"`
 	TimeoutMs     int             `json:"timeoutMs,omitempty"`
+}
+
+type waitForRequest struct {
+	Condition  browser.WaitForCondition `json:"condition"`
+	TimeoutMs  int                      `json:"timeoutMs,omitempty"`
+	IntervalMs int                      `json:"intervalMs,omitempty"`
+	StableMs   int                      `json:"stableMs,omitempty"`
 }
 
 type screenshotRequest struct {
@@ -396,6 +404,33 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		ClickCount:    req.ClickCount,
 		MotionProfile: req.MotionProfile,
 		TimeoutMs:     req.TimeoutMs,
+	})
+	if err != nil {
+		writeBrowserErr(w, err)
+		return
+	}
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) WaitFor(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	if h.browser == nil {
+		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
+		return
+	}
+	var req waitForRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	out, err := h.browser.WaitFor(runtimeSessionID, browser.WaitForInput{
+		Condition:  req.Condition,
+		TimeoutMs:  req.TimeoutMs,
+		IntervalMs: req.IntervalMs,
+		StableMs:   req.StableMs,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)
@@ -734,6 +769,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):
 		types.WriteErr(w, http.StatusBadGateway, "ACTION_FAILED", err.Error())
+	case errors.Is(err, browser.ErrWaitForTimeout):
+		types.WriteErr(w, http.StatusGatewayTimeout, "WAIT_FOR_TIMEOUT", err.Error())
 	case errors.Is(err, browser.ErrUploadFilesFailed):
 		types.WriteErr(w, http.StatusBadGateway, "UPLOAD_FILES_FAILED", err.Error())
 	case errors.Is(err, browser.ErrUploadSourceFetchFailed):

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,9 @@ type fakeBrowserRuntime struct {
 	evaluateCalls   []browser.EvaluateInput
 	evaluateOut     browser.EvaluateOutput
 	evaluateErr     error
+	waitForCalls    []browser.WaitForInput
+	waitForOut      browser.WaitForOutput
+	waitForErr      error
 	pointerSub      browser.PointerSubscription
 	pointerErr      error
 	pointerCalls    []string
@@ -103,6 +107,11 @@ func (f *fakeBrowserRuntime) UploadFiles(_ string, input browser.UploadFilesInpu
 func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (browser.EvaluateOutput, error) {
 	f.evaluateCalls = append(f.evaluateCalls, input)
 	return f.evaluateOut, f.evaluateErr
+}
+
+func (f *fakeBrowserRuntime) WaitFor(_ string, input browser.WaitForInput) (browser.WaitForOutput, error) {
+	f.waitForCalls = append(f.waitForCalls, input)
+	return f.waitForOut, f.waitForErr
 }
 
 func (f *fakeBrowserRuntime) SubscribePointer(runtimeSessionID string) (browser.PointerSubscription, error) {
@@ -264,6 +273,62 @@ func TestAct_ForwardsPastePayload(t *testing.T) {
 	call := browserRuntime.actCalls[0]
 	if call.Action != "paste" || call.Ref != "e8" || call.Text != "正文第一段\n正文第二段" || call.HTML != "<p>正文第一段</p><p>正文第二段</p>" || !call.Clear || call.MotionProfile != "direct" || call.TimeoutMs != 5000 {
 		t.Fatalf("unexpected act call: %+v", call)
+	}
+}
+
+func TestWaitFor_ForwardsActionabilityCondition(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{waitForOut: browser.WaitForOutput{OK: true, ConditionType: "ref_actionable"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/wait-for", bytes.NewReader([]byte(`{
+		"condition":{
+			"type":"ref_actionable",
+			"ref":"publish_button",
+			"checks":["visible","stable","receivesEvents","enabled"]
+		},
+		"timeoutMs":30000,
+		"intervalMs":250,
+		"stableMs":500
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.WaitFor(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.waitForCalls) != 1 {
+		t.Fatalf("expected one waitFor call, got %+v", browserRuntime.waitForCalls)
+	}
+	call := browserRuntime.waitForCalls[0]
+	if call.Condition.Type != "ref_actionable" || call.Condition.Ref != "publish_button" || call.TimeoutMs != 30000 || call.IntervalMs != 250 || call.StableMs != 500 {
+		t.Fatalf("unexpected waitFor call: %+v", call)
+	}
+	wantChecks := []string{"visible", "stable", "receivesEvents", "enabled"}
+	if !reflect.DeepEqual(call.Condition.Checks, wantChecks) {
+		t.Fatalf("unexpected checks: got %+v want %+v", call.Condition.Checks, wantChecks)
+	}
+}
+
+func TestWaitFor_ForwardsTextVisibleCondition(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{waitForOut: browser.WaitForOutput{OK: true, ConditionType: "text_visible"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/wait-for", bytes.NewReader([]byte(`{
+		"condition":{"type":"text_visible","text":"审核中"},
+		"timeoutMs":10000
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.WaitFor(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.waitForCalls) != 1 || browserRuntime.waitForCalls[0].Condition.Text != "审核中" {
+		t.Fatalf("unexpected waitFor calls: %+v", browserRuntime.waitForCalls)
 	}
 }
 

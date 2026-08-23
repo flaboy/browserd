@@ -74,6 +74,22 @@ func TestNew_RoutesUploadFiles(t *testing.T) {
 	}
 }
 
+func TestNew_RoutesWaitFor(t *testing.T) {
+	handler := New(config.Config{})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_missing/wait-for", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusNotFound {
+		t.Fatalf("wait-for route was not registered: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "NOT_FOUND") {
+		t.Fatalf("wait-for route returned not found: %s", rr.Body.String())
+	}
+}
+
 func TestRouterRoutesPointerEventsBeforeGenericLiveView(t *testing.T) {
 	source, err := os.ReadFile("router.go")
 	if err != nil {

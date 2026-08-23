@@ -40,6 +40,7 @@ var (
 	ErrEvaluateFailed          = errors.New("evaluate failed")
 	ErrUploadFilesFailed       = errors.New("upload files failed")
 	ErrUploadSourceFetchFailed = errors.New("upload source fetch failed")
+	ErrWaitForTimeout          = errors.New("wait for timeout")
 	ErrScreenshotFailed        = errors.New("screenshot failed")
 	ErrPlaywrightUnavailable   = errors.New("playwright not available")
 	ErrProxyHopFailed          = errors.New("proxy hop failed")
@@ -160,6 +161,35 @@ type EvaluateOutput struct {
 	Result any    `json:"result"`
 	URL    string `json:"url"`
 	Title  string `json:"title"`
+}
+
+type WaitForCondition struct {
+	Type        string   `json:"type"`
+	Ref         string   `json:"ref,omitempty"`
+	Selector    string   `json:"selector,omitempty"`
+	Text        string   `json:"text,omitempty"`
+	URLContains string   `json:"urlContains,omitempty"`
+	URLMatches  string   `json:"urlMatches,omitempty"`
+	Checks      []string `json:"checks,omitempty"`
+}
+
+type WaitForInput struct {
+	Condition  WaitForCondition `json:"condition"`
+	TimeoutMs  int              `json:"timeoutMs,omitempty"`
+	IntervalMs int              `json:"intervalMs,omitempty"`
+	StableMs   int              `json:"stableMs,omitempty"`
+}
+
+type WaitForOutput struct {
+	OK            bool     `json:"ok"`
+	ConditionType string   `json:"conditionType"`
+	Ref           string   `json:"ref,omitempty"`
+	Text          string   `json:"text,omitempty"`
+	X             float64  `json:"x,omitempty"`
+	Y             float64  `json:"y,omitempty"`
+	Checks        []string `json:"checks,omitempty"`
+	URL           string   `json:"url,omitempty"`
+	Title         string   `json:"title,omitempty"`
 }
 
 type Service struct {
@@ -606,6 +636,229 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 		URL:    url,
 		Title:  title,
 	}, nil
+}
+
+func (s *Service) WaitFor(runtimeSessionID string, input WaitForInput) (WaitForOutput, error) {
+	if strings.TrimSpace(input.Condition.Type) == "" {
+		return WaitForOutput{}, ErrInvalidRequest
+	}
+	timeoutMs := input.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+	intervalMs := input.IntervalMs
+	if intervalMs <= 0 {
+		intervalMs = 250
+	}
+	stableMs := input.StableMs
+	if stableMs < 0 {
+		return WaitForOutput{}, ErrInvalidRequest
+	}
+	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, timeoutMs)
+	if err != nil {
+		return WaitForOutput{}, err
+	}
+	defer cancel()
+
+	var firstMatchedAt time.Time
+	for {
+		out, matched, err := s.checkWaitForCondition(ctx, runtimeSessionID, input.Condition)
+		if err != nil {
+			return WaitForOutput{}, err
+		}
+		if matched {
+			if stableMs == 0 {
+				return out, nil
+			}
+			if firstMatchedAt.IsZero() {
+				firstMatchedAt = time.Now()
+			}
+			if time.Since(firstMatchedAt) >= time.Duration(stableMs)*time.Millisecond {
+				return out, nil
+			}
+		} else {
+			firstMatchedAt = time.Time{}
+		}
+		timer := time.NewTimer(time.Duration(intervalMs) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return WaitForOutput{}, fmt.Errorf("%w: condition %q did not match within %dms", ErrWaitForTimeout, input.Condition.Type, timeoutMs)
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *Service) checkWaitForCondition(ctx context.Context, runtimeSessionID string, condition WaitForCondition) (WaitForOutput, bool, error) {
+	condition.Type = strings.TrimSpace(condition.Type)
+	switch condition.Type {
+	case "url_contains":
+		if strings.TrimSpace(condition.URLContains) == "" {
+			return WaitForOutput{}, false, ErrInvalidRequest
+		}
+		return s.evaluateWaitFor(ctx, waitForURLScript("contains"), condition)
+	case "url_matches":
+		if strings.TrimSpace(condition.URLMatches) == "" {
+			return WaitForOutput{}, false, ErrInvalidRequest
+		}
+		return s.evaluateWaitFor(ctx, waitForURLScript("matches"), condition)
+	case "text_visible", "text_gone":
+		if strings.TrimSpace(condition.Text) == "" {
+			return WaitForOutput{}, false, ErrInvalidRequest
+		}
+		return s.evaluateWaitFor(ctx, waitForTextScript(), condition)
+	case "element_visible", "element_enabled", "element_editable", "ref_actionable":
+		if strings.TrimSpace(condition.Ref) == "" && strings.TrimSpace(condition.Selector) == "" {
+			return WaitForOutput{}, false, ErrInvalidRequest
+		}
+		if strings.TrimSpace(condition.Selector) == "" {
+			refState, err := s.state.GetRef(runtimeSessionID, condition.Ref)
+			if err != nil {
+				return WaitForOutput{}, false, err
+			}
+			if refState.Kind != "element" {
+				return WaitForOutput{}, false, browserrt.ErrInvalidRef
+			}
+			condition.Selector = refState.Selector
+		}
+		if len(condition.Checks) == 0 {
+			condition.Checks = defaultWaitForChecks(condition.Type)
+		}
+		return s.evaluateWaitFor(ctx, waitForElementScript(), condition)
+	default:
+		return WaitForOutput{}, false, ErrInvalidRequest
+	}
+}
+
+func (s *Service) evaluateWaitFor(ctx context.Context, script string, condition WaitForCondition) (WaitForOutput, bool, error) {
+	argsJSON, err := json.Marshal(condition)
+	if err != nil {
+		return WaitForOutput{}, false, err
+	}
+	var out struct {
+		OK     bool     `json:"ok"`
+		Text   string   `json:"text"`
+		X      float64  `json:"x"`
+		Y      float64  `json:"y"`
+		Checks []string `json:"checks"`
+		URL    string   `json:"url"`
+		Title  string   `json:"title"`
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(async () => {
+      const condition = %s;
+      %s
+    })()`, string(argsJSON), script), &out, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	})); err != nil {
+		return WaitForOutput{}, false, err
+	}
+	if !out.OK {
+		return WaitForOutput{}, false, nil
+	}
+	return WaitForOutput{
+		OK:            true,
+		ConditionType: condition.Type,
+		Ref:           condition.Ref,
+		Text:          out.Text,
+		X:             out.X,
+		Y:             out.Y,
+		Checks:        out.Checks,
+		URL:           out.URL,
+		Title:         out.Title,
+	}, true, nil
+}
+
+func defaultWaitForChecks(conditionType string) []string {
+	switch conditionType {
+	case "element_visible":
+		return []string{"visible"}
+	case "element_enabled":
+		return []string{"visible", "enabled"}
+	case "element_editable":
+		return []string{"visible", "enabled", "editable"}
+	default:
+		return []string{"visible", "stable", "receivesEvents", "enabled"}
+	}
+}
+
+func waitForURLScript(mode string) string {
+	switch mode {
+	case "matches":
+		return `
+      const url = location.href;
+      let ok = false;
+      try { ok = new RegExp(condition.urlMatches).test(url); } catch { ok = false; }
+      return { ok, url, title: document.title || "" };`
+	default:
+		return `
+      const url = location.href;
+      return { ok: url.includes(condition.urlContains || ""), url, title: document.title || "" };`
+	}
+}
+
+func waitForTextScript() string {
+	return `
+      const visible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const text = String(condition.text || "");
+      const nodes = Array.from(document.querySelectorAll("body *"));
+      const match = nodes.find((el) => visible(el) && (el.innerText || el.textContent || "").includes(text));
+      const found = Boolean(match);
+      const ok = condition.type === "text_gone" ? !found : found;
+      const r = match ? match.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+      return { ok, text: found ? text : "", x: r.left + r.width / 2, y: r.top + r.height / 2, url: location.href, title: document.title || "" };`
+}
+
+func waitForElementScript() string {
+	return `
+      const selector = String(condition.selector || "");
+      const checks = Array.isArray(condition.checks) ? condition.checks : [];
+      const el = selector ? document.querySelector(selector) : null;
+      if (!el) return { ok: false, checks, url: location.href, title: document.title || "" };
+      const visible = (node) => {
+        const style = window.getComputedStyle(node);
+        const r = node.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const enabled = (node) => {
+        if (node.closest?.("[aria-disabled=true]")) return false;
+        if (node.disabled) return false;
+        const disabledFieldset = node.closest?.("fieldset[disabled]");
+        return !disabledFieldset;
+      };
+      const editable = (node) => {
+        const tag = (node.tagName || "").toLowerCase();
+        const type = (node.type || "").toLowerCase();
+        const textInput = tag === "textarea" || (tag === "input" && !["button","checkbox","file","hidden","image","radio","range","reset","submit"].includes(type));
+        return enabled(node) && !node.readOnly && node.getAttribute("aria-readonly") !== "true" && (node.isContentEditable || textInput);
+      };
+      const stable = async (node) => {
+        const first = node.getBoundingClientRect();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const second = node.getBoundingClientRect();
+        return first.left === second.left && first.top === second.top && first.width === second.width && first.height === second.height;
+      };
+      const receivesEvents = (node) => {
+        const r = node.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        return Boolean(hit && (hit === node || node.contains(hit) || hit.contains(node)));
+      };
+      const r = el.getBoundingClientRect();
+      const results = {
+        visible: visible(el),
+        enabled: enabled(el),
+        editable: editable(el),
+        receivesEvents: receivesEvents(el),
+        stable: await stable(el)
+      };
+      const ok = checks.every((check) => results[check] === true);
+      return { ok, checks, text: (el.innerText || el.value || el.textContent || "").trim(), x: r.left + r.width / 2, y: r.top + r.height / 2, url: location.href, title: document.title || "" };`
 }
 
 func validateActionRef(action string, ref browserrt.RefState) error {
