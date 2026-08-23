@@ -84,6 +84,39 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	}
 }
 
+func TestManager_CreateAcceptsGenericProfilePath(t *testing.T) {
+	tmp := t.TempDir()
+	store := profile.NewMemoryStore()
+	profilePath := "file://browser-sessions/dev/douyin/local/profile.tgz"
+	mgr := NewManager(ManagerOptions{
+		Store:      store,
+		Workdir:    filepath.Join(tmp, "work"),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+
+	out, err := mgr.Create(CreateInput{
+		ProfilePath: profilePath,
+		Fingerprint: testFingerprintConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := mgr.Get(out.RuntimeSessionID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if info.ProfilePath != profilePath {
+		t.Fatalf("profile path mismatch: %s", info.ProfilePath)
+	}
+
+	if _, err := mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "new"}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if store.LastPutPath() != profilePath {
+		t.Fatalf("last put path mismatch: %s", store.LastPutPath())
+	}
+}
+
 func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 	tmp := t.TempDir()
 	store := profile.NewMemoryStore()

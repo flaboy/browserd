@@ -20,7 +20,7 @@ import (
 func New(cfg config.Config) http.Handler {
 	var store profile.Store
 	switch strings.ToLower(strings.TrimSpace(cfg.ProfileStore)) {
-	case "s3":
+	case "s3", "oss":
 		s3Store, err := profile.NewS3Store(profile.S3StoreConfig{
 			Endpoint:        cfg.S3Endpoint,
 			Region:          cfg.S3Region,
@@ -29,11 +29,18 @@ func New(cfg config.Config) http.Handler {
 			ForcePathStyle:  cfg.S3ForcePathStyle,
 		})
 		if err != nil {
-			log.Printf("browserd: init s3 store failed, fallback to memory store: %v", err)
-			store = profile.NewMemoryStore()
+			log.Fatalf("browserd: init %s profile store failed: %v", cfg.ProfileStore, err)
 		} else {
 			store = s3Store
 		}
+	case "file":
+		fileStore, err := profile.NewFileStore(profile.FileStoreConfig{Root: cfg.ProfileFileRoot})
+		if err != nil {
+			log.Fatalf("browserd: init file profile store failed: %v", err)
+		}
+		store = fileStore
+	case "memory":
+		store = profile.NewMemoryStore()
 	default:
 		store = profile.NewMemoryStore()
 	}

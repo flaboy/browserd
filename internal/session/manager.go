@@ -22,6 +22,7 @@ var (
 )
 
 type CreateInput struct {
+	ProfilePath     string
 	S3ProfilePath   string
 	ExpectedVersion string
 	LeaseID         string
@@ -112,10 +113,14 @@ func NewManager(opts ManagerOptions) Manager {
 }
 
 func (m *manager) Create(input CreateInput) (CreateOutput, error) {
-	if strings.TrimSpace(input.S3ProfilePath) == "" {
+	profilePath := strings.TrimSpace(input.ProfilePath)
+	if profilePath == "" {
+		profilePath = strings.TrimSpace(input.S3ProfilePath)
+	}
+	if profilePath == "" {
 		return CreateOutput{}, ErrInvalidRequest
 	}
-	if !strings.HasSuffix(strings.TrimSpace(input.S3ProfilePath), "profile.tgz") {
+	if !strings.HasSuffix(profilePath, "profile.tgz") {
 		return CreateOutput{}, ErrInvalidRequest
 	}
 	fp := input.Fingerprint.Normalized()
@@ -138,7 +143,7 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		return CreateOutput{}, err
 	}
 
-	data, version, found, err := m.store.Get(context.Background(), input.S3ProfilePath)
+	data, version, found, err := m.store.Get(context.Background(), profilePath)
 	if err != nil {
 		return CreateOutput{}, err
 	}
@@ -170,7 +175,7 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 	m.mu.Lock()
 	m.sessions[rid] = runtimeSession{
 		RuntimeSessionID: rid,
-		ProfilePath:      input.S3ProfilePath,
+		ProfilePath:      profilePath,
 		ProfileDir:       profileDir,
 		Version:          resolvedVersion,
 		LeaseID:          leaseID,

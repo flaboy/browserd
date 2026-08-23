@@ -251,6 +251,36 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 	}
 }
 
+func TestCreateSession_AcceptsGenericProfilePath(t *testing.T) {
+	manager := &fakeSessionManager{
+		createOut: session.CreateOutput{
+			RuntimeSessionID: "rt_1",
+			CDPWsURL:         "ws://browserd:9222/devtools/browser/rt_1",
+			LeaseID:          "lease_1",
+			ResolvedVersion:  "new",
+		},
+	}
+	controller := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
+		"profilePath":"file://browser-sessions/dev/douyin/local/profile.tgz",
+		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	controller.CreateSession(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.createCalls) != 1 {
+		t.Fatalf("expected one create call, got %+v", manager.createCalls)
+	}
+	if manager.createCalls[0].ProfilePath != "file://browser-sessions/dev/douyin/local/profile.tgz" {
+		t.Fatalf("profile path was not forwarded: %+v", manager.createCalls[0])
+	}
+}
+
 func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
 	manager := &fakeSessionManager{
 		createOut: session.CreateOutput{
