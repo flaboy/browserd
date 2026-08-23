@@ -156,11 +156,12 @@ type Service struct {
 	assets   assets.Store
 	proxyHop ProxyHopOptions
 
-	capturePNG        func(context.Context) ([]byte, error)
-	setFileInputFiles func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
-	mu                sync.Mutex
-	browsers          map[string]*activeBrowser
-	pointers          map[string]pointerState
+	capturePNG         func(context.Context) ([]byte, error)
+	setFileInputFiles  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
+	mu                 sync.Mutex
+	browsers           map[string]*activeBrowser
+	pointers           map[string]pointerState
+	pointerSubscribers map[string]map[chan VirtualPointerSnapshot]struct{}
 }
 
 type pointerState struct {
@@ -221,13 +222,14 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		state = browserrt.NewState()
 	}
 	svc := &Service{
-		sessions:   opts.Sessions,
-		state:      state,
-		assets:     opts.Assets,
-		proxyHop:   opts.ProxyHop,
-		capturePNG: capturePagePNG,
-		browsers:   map[string]*activeBrowser{},
-		pointers:   map[string]pointerState{},
+		sessions:           opts.Sessions,
+		state:              state,
+		assets:             opts.Assets,
+		proxyHop:           opts.ProxyHop,
+		capturePNG:         capturePagePNG,
+		browsers:           map[string]*activeBrowser{},
+		pointers:           map[string]pointerState{},
+		pointerSubscribers: map[string]map[chan VirtualPointerSnapshot]struct{}{},
 	}
 	svc.setFileInputFiles = svc.defaultSetFileInputFiles
 	return svc
@@ -248,6 +250,10 @@ func (s *Service) Close(runtimeSessionID string) error {
 	}
 	delete(s.browsers, runtimeSessionID)
 	delete(s.pointers, runtimeSessionID)
+	for ch := range s.pointerSubscribers[runtimeSessionID] {
+		close(ch)
+	}
+	delete(s.pointerSubscribers, runtimeSessionID)
 	if b.cmd != nil && b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
 		_, _ = b.cmd.Process.Wait()
@@ -729,13 +735,48 @@ func (s *Service) PointerSnapshot(runtimeSessionID string) (VirtualPointerSnapsh
 	return newVirtualPointerSnapshot(runtimeSessionID, state), true
 }
 
+func (s *Service) SubscribePointer(runtimeSessionID string) (PointerSubscription, error) {
+	if strings.TrimSpace(runtimeSessionID) == "" {
+		return PointerSubscription{}, ErrInvalidRequest
+	}
+	ch := make(chan VirtualPointerSnapshot, 16)
+	s.mu.Lock()
+	if s.pointerSubscribers[runtimeSessionID] == nil {
+		s.pointerSubscribers[runtimeSessionID] = map[chan VirtualPointerSnapshot]struct{}{}
+	}
+	s.pointerSubscribers[runtimeSessionID][ch] = struct{}{}
+	if state, ok := s.pointers[runtimeSessionID]; ok && state.Initialized {
+		ch <- newVirtualPointerSnapshot(runtimeSessionID, state)
+	}
+	s.mu.Unlock()
+	return PointerSubscription{
+		C: ch,
+		close: func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if _, ok := s.pointerSubscribers[runtimeSessionID][ch]; ok {
+				delete(s.pointerSubscribers[runtimeSessionID], ch)
+				close(ch)
+			}
+		},
+	}, nil
+}
+
 func (s *Service) setPointer(runtimeSessionID string, point pointerPoint, viewport viewportRect) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pointers[runtimeSessionID] = pointerState{
+	state := pointerState{
 		Point:       point,
 		Viewport:    viewport,
 		Initialized: true,
+	}
+	s.pointers[runtimeSessionID] = state
+	snapshot := newVirtualPointerSnapshot(runtimeSessionID, state)
+	for ch := range s.pointerSubscribers[runtimeSessionID] {
+		select {
+		case ch <- snapshot:
+		default:
+		}
 	}
 }
 

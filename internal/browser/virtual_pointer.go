@@ -13,6 +13,17 @@ type VirtualPointerSnapshot struct {
 	RuntimeSessionID string `json:"-"`
 }
 
+type PointerSubscription struct {
+	C     <-chan VirtualPointerSnapshot
+	close func()
+}
+
+func (s PointerSubscription) Close() {
+	if s.close != nil {
+		s.close()
+	}
+}
+
 func newVirtualPointerSnapshot(_ string, state pointerState) VirtualPointerSnapshot {
 	return VirtualPointerSnapshot{
 		X:              state.Point.X,
