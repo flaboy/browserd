@@ -207,6 +207,36 @@ func TestAct_ForwardsViewportCoordinates(t *testing.T) {
 	}
 }
 
+func TestAct_ForwardsScrollDelta(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "scroll"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+			"action":"scroll",
+			"x":760,
+			"y":690,
+			"deltaY":720,
+			"deltaX":12,
+			"motionProfile":"direct",
+			"timeoutMs":5000
+		}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 1 {
+		t.Fatalf("expected one act call, got %+v", browserRuntime.actCalls)
+	}
+	call := browserRuntime.actCalls[0]
+	if call.Action != "scroll" || call.Ref != "" || call.X != 760 || call.Y != 690 || call.DeltaY != 720 || call.DeltaX != 12 || call.MotionProfile != "direct" || call.TimeoutMs != 5000 {
+		t.Fatalf("unexpected act call: %+v", call)
+	}
+}
+
 func TestAct_RejectsTargetField(t *testing.T) {
 	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
 	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")

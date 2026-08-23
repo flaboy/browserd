@@ -90,6 +90,8 @@ type ActInput struct {
 	Ref           string   `json:"ref,omitempty"`
 	X             float64  `json:"x,omitempty"`
 	Y             float64  `json:"y,omitempty"`
+	DeltaX        float64  `json:"deltaX,omitempty"`
+	DeltaY        float64  `json:"deltaY,omitempty"`
 	Text          string   `json:"text,omitempty"`
 	Key           string   `json:"key,omitempty"`
 	Value         string   `json:"value,omitempty"`
@@ -519,6 +521,8 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 			return ActOutput{}, refErr
 		}
 		_, _, err = s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
+	case "scroll":
+		err = s.trustedScroll(ctx, runtimeSessionID, input)
 	case "type":
 		err = s.trustedTextInput(ctx, runtimeSessionID, input)
 	case "fill":
@@ -691,6 +695,44 @@ func (s *Service) trustedClickPoint(ctx context.Context, runtimeSessionID string
 		},
 	}
 	return s.trustedClickTarget(ctx, runtimeSessionID, target, input)
+}
+
+func (s *Service) trustedScroll(ctx context.Context, runtimeSessionID string, input ActInput) error {
+	if input.DeltaX == 0 && input.DeltaY == 0 {
+		return ErrInvalidRequest
+	}
+	viewport := viewportRect{Width: 1366, Height: 768}
+	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
+	x := input.X
+	y := input.Y
+	if x <= 0 {
+		x = viewport.Width / 2
+	}
+	if y <= 0 {
+		y = viewport.Height / 2
+	}
+	target := browserTarget{
+		Rect: targetRect{
+			X:      x - 0.5,
+			Y:      y - 0.5,
+			Width:  1,
+			Height: 1,
+		},
+	}
+	end, viewport, err := s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
+	if err != nil {
+		return err
+	}
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := cdinput.DispatchMouseEvent(cdinput.MouseWheel, end.X, end.Y).
+			WithDeltaX(input.DeltaX).
+			WithDeltaY(input.DeltaY).
+			Do(ctx); err != nil {
+			return err
+		}
+		s.setPointer(runtimeSessionID, end, viewport)
+		return nil
+	}))
 }
 
 func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) error {

@@ -139,6 +139,8 @@ type actRequest struct {
 	Target        json.RawMessage `json:"target,omitempty"`
 	X             float64         `json:"x,omitempty"`
 	Y             float64         `json:"y,omitempty"`
+	DeltaX        float64         `json:"deltaX,omitempty"`
+	DeltaY        float64         `json:"deltaY,omitempty"`
 	Text          string          `json:"text,omitempty"`
 	Key           string          `json:"key,omitempty"`
 	Value         string          `json:"value,omitempty"`
@@ -380,6 +382,8 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		Ref:           req.Ref,
 		X:             req.X,
 		Y:             req.Y,
+		DeltaX:        req.DeltaX,
+		DeltaY:        req.DeltaY,
 		Text:          req.Text,
 		Key:           req.Key,
 		Value:         req.Value,

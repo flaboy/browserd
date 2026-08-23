@@ -405,6 +405,22 @@ func TestAct_ClickSupportsViewportCoordinates(t *testing.T) {
 	}
 }
 
+func TestAct_ScrollUsesTrustedMouseWheel(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, marker := range []string{`case "scroll":`, "trustedScroll", "cdinput.MouseWheel", "WithDeltaX(input.DeltaX)", "WithDeltaY(input.DeltaY)"} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("Act scroll trusted mouse wheel path missing %q", marker)
+		}
+	}
+	if strings.Contains(text, `window.scrollBy`) {
+		t.Fatalf("scroll action must not mutate page scroll position through DOM")
+	}
+}
+
 func TestAct_HoverUsesTrustedPointerMovement(t *testing.T) {
 	source, err := os.ReadFile("service.go")
 	if err != nil {
