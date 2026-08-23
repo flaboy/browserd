@@ -67,7 +67,10 @@ const browserSnapshotRuntimeScript = `(() => {
     const out = [];
     const actionableNodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,area,summary,[role],[tabindex]'));
     for (const el of actionableNodes) {
-        if (!isVisible(el))
+        const tag = el.tagName.toLowerCase();
+        const type = normalize(el.getAttribute('type') || '', 80).toLowerCase();
+        const isFileInput = tag === 'input' && type === 'file';
+        if (!isFileInput && !isVisible(el))
             continue;
         if (!isEnabled(el))
             continue;
@@ -82,6 +85,8 @@ const browserSnapshotRuntimeScript = `(() => {
             name: nameOf(el),
             text: textOf(el),
             tagName: el.tagName.toLowerCase(),
+            type,
+            accept: normalize(el.getAttribute('accept') || '', 200),
             href: normalize(el.getAttribute('href') || '', 200),
             value: normalize(el.value || '', 200),
             placeholder: normalize(el.getAttribute('placeholder') || '', 120),
@@ -207,7 +212,7 @@ const browserSnapshotRuntimeScript = `(() => {
                 break;
             case 'inputs':
             case 'textareas':
-                addRow(group, ['ref', 'tag', 'value', 'placeholder'], [ref, tagName, row.value, row.placeholder]);
+                addRow(group, ['ref', 'tag', 'type', 'accept', 'value', 'placeholder'], [ref, tagName, row.type, row.accept, row.value, row.placeholder]);
                 break;
             case 'selects':
                 addRow(group, ['ref', 'tag', 'value'], [ref, tagName, row.value]);

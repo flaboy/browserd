@@ -16,3 +16,15 @@ func TestBrowserSnapshotRuntimeComesFromPackage(t *testing.T) {
 		t.Fatalf("expected runtime script to come from browser-snapshot package")
 	}
 }
+
+func TestBrowserSnapshotRuntimeExposesHiddenFileInputs(t *testing.T) {
+	for _, marker := range []string{
+		"tag === 'input' && type === 'file'",
+		"accept: normalize(el.getAttribute('accept') || '', 200)",
+		"['ref', 'tag', 'type', 'accept', 'value', 'placeholder']",
+	} {
+		if !strings.Contains(browserSnapshotRuntimeScript, marker) {
+			t.Fatalf("snapshot runtime must expose hidden file inputs with marker %q", marker)
+		}
+	}
+}
