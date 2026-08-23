@@ -421,6 +421,24 @@ func TestAct_ScrollUsesTrustedMouseWheel(t *testing.T) {
 	}
 }
 
+func TestAct_PasteUsesClipboardAndKeyboardShortcut(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, marker := range []string{`case "paste":`, "trustedPaste", "navigator.clipboard.write", "ClipboardItem", "Key: \"v\", Modifiers: cdinput.ModifierCtrl"} {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("Act paste trusted clipboard path missing %q", marker)
+		}
+	}
+	for _, forbidden := range []string{"innerHTML =", "textContent =", "execCommand"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("paste action must not write editor DOM directly with %q", forbidden)
+		}
+	}
+}
+
 func TestAct_HoverUsesTrustedPointerMovement(t *testing.T) {
 	source, err := os.ReadFile("service.go")
 	if err != nil {

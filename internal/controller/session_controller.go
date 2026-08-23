@@ -142,6 +142,7 @@ type actRequest struct {
 	DeltaX        float64         `json:"deltaX,omitempty"`
 	DeltaY        float64         `json:"deltaY,omitempty"`
 	Text          string          `json:"text,omitempty"`
+	HTML          string          `json:"html,omitempty"`
 	Key           string          `json:"key,omitempty"`
 	Value         string          `json:"value,omitempty"`
 	Values        []string        `json:"values,omitempty"`
@@ -385,6 +386,7 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		DeltaX:        req.DeltaX,
 		DeltaY:        req.DeltaY,
 		Text:          req.Text,
+		HTML:          req.HTML,
 		Key:           req.Key,
 		Value:         req.Value,
 		Values:        req.Values,

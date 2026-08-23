@@ -21,11 +21,13 @@ import (
 	browserrt "browserd/internal/runtime"
 	"browserd/internal/session"
 
+	cdbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/dom"
 	cdinput "github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -93,6 +95,7 @@ type ActInput struct {
 	DeltaX        float64  `json:"deltaX,omitempty"`
 	DeltaY        float64  `json:"deltaY,omitempty"`
 	Text          string   `json:"text,omitempty"`
+	HTML          string   `json:"html,omitempty"`
 	Key           string   `json:"key,omitempty"`
 	Value         string   `json:"value,omitempty"`
 	Values        []string `json:"values,omitempty"`
@@ -523,6 +526,8 @@ func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error
 		_, _, err = s.trustedMoveTarget(ctx, runtimeSessionID, target, input)
 	case "scroll":
 		err = s.trustedScroll(ctx, runtimeSessionID, input)
+	case "paste":
+		err = s.trustedPaste(ctx, runtimeSessionID, input)
 	case "type":
 		err = s.trustedTextInput(ctx, runtimeSessionID, input)
 	case "fill":
@@ -733,6 +738,88 @@ func (s *Service) trustedScroll(ctx context.Context, runtimeSessionID string, in
 		s.setPointer(runtimeSessionID, end, viewport)
 		return nil
 	}))
+}
+
+func (s *Service) trustedPaste(ctx context.Context, runtimeSessionID string, input ActInput) error {
+	if strings.TrimSpace(input.Text) == "" && strings.TrimSpace(input.HTML) == "" {
+		return ErrInvalidRequest
+	}
+	if input.Ref == "" {
+		return ErrInvalidRequest
+	}
+	target, err := s.resolveActRef(ctx, runtimeSessionID, input.Ref)
+	if err != nil {
+		return err
+	}
+	if err := s.trustedClickTarget(ctx, runtimeSessionID, target, input); err != nil {
+		return err
+	}
+	if input.Clear {
+		for _, key := range []textInputKey{
+			{Key: "a", Modifiers: cdinput.ModifierCtrl},
+			{Key: kb.Backspace},
+		} {
+			if err := keyEventAction(key).Do(ctx); err != nil {
+				return err
+			}
+			if err := sleepBehavior(ctx, defaultBehaviorProfile().KeyAfterDelay); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.writeClipboard(ctx, input.Text, input.HTML); err != nil {
+		return err
+	}
+	return keyEventAction(textInputKey{Key: "v", Modifiers: cdinput.ModifierCtrl}).Do(ctx)
+}
+
+func (s *Service) writeClipboard(ctx context.Context, text string, html string) error {
+	var currentURL string
+	_ = chromedp.Run(ctx, chromedp.Location(&currentURL))
+	if origin := clipboardOrigin(currentURL); origin != "" {
+		_ = cdbrowser.GrantPermissions([]cdbrowser.PermissionType{
+			cdbrowser.PermissionTypeClipboardReadWrite,
+			cdbrowser.PermissionTypeClipboardSanitizedWrite,
+		}).WithOrigin(origin).Do(ctx)
+	}
+	textJSON, err := json.Marshal(text)
+	if err != nil {
+		return err
+	}
+	htmlJSON, err := json.Marshal(html)
+	if err != nil {
+		return err
+	}
+	script := fmt.Sprintf(`(async () => {
+      const text = %s;
+      const html = %s;
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      if (html && typeof ClipboardItem !== "undefined") {
+        const item = new ClipboardItem({
+          "text/plain": new Blob([text || ""], {type: "text/plain"}),
+          "text/html": new Blob([html], {type: "text/html"})
+        });
+        await navigator.clipboard.write([item]);
+        return true;
+      }
+      await navigator.clipboard.writeText(text || html);
+      return true;
+    })()`, string(textJSON), string(htmlJSON))
+	var ok bool
+	return chromedp.Run(ctx, chromedp.Evaluate(script, &ok, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	}))
+}
+
+func clipboardOrigin(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) error {

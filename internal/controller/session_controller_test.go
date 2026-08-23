@@ -237,6 +237,36 @@ func TestAct_ForwardsScrollDelta(t *testing.T) {
 	}
 }
 
+func TestAct_ForwardsPastePayload(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "paste"}}
+	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{
+			"action":"paste",
+			"ref":"e8",
+			"text":"正文第一段\n正文第二段",
+			"html":"<p>正文第一段</p><p>正文第二段</p>",
+			"clear":true,
+			"motionProfile":"direct",
+			"timeoutMs":5000
+		}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	controller.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 1 {
+		t.Fatalf("expected one act call, got %+v", browserRuntime.actCalls)
+	}
+	call := browserRuntime.actCalls[0]
+	if call.Action != "paste" || call.Ref != "e8" || call.Text != "正文第一段\n正文第二段" || call.HTML != "<p>正文第一段</p><p>正文第二段</p>" || !call.Clear || call.MotionProfile != "direct" || call.TimeoutMs != 5000 {
+		t.Fatalf("unexpected act call: %+v", call)
+	}
+}
+
 func TestAct_RejectsTargetField(t *testing.T) {
 	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "type"}}
 	controller := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
