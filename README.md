@@ -20,6 +20,9 @@ go run ./cmd/browserd
 环境变量：
 - `BROWSERD_PORT`（默认 `7011`）
 - `BROWSERD_CDP_BASE_URL`（默认 `ws://browserd:9222/devtools/browser`）
+- `BROWSERD_PROFILE_STORE`：`s3` 或 `file`
+- `BROWSERD_PROFILE_BUCKET`：profile 使用的 S3 bucket，默认 `private`
+- `BROWSERD_PROFILE_FILE_ROOT`：`file` 模式下 profile 逻辑路径映射到的本地根目录
 
 ## Docker 镜像（内置 Chromium）
 - 镜像内已打包 Chromium（路径默认 `CHROME_BIN=/usr/bin/chromium-browser`），可直接用于 chromedp/DevTools 场景。
@@ -41,7 +44,7 @@ POST /v1/sessions
 Content-Type: application/json
 
 {
-  "s3ProfilePath": "s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+  "profilePath": "/browser-sessions/t_1/c_1/bs_1/profile.tgz",
   "fingerprint": {
     "seed": "fp_7f8c2a0e-57f7-4f34-93d3-45830f3c6c6d",
     "locale": "en-US",
@@ -69,6 +72,8 @@ Content-Type: application/json
 
 `POST /v1/sessions` 是同步初始化接口：
 - `fingerprint` 必填，且必须传完整浏览器主体配置，包括 `seed`、`locale`、`languages`、`acceptLanguage`、`timezone`、`platform`、`os`、`userAgent`、视口/屏幕尺寸、硬件并发、内存与 WebGL 信息
+- `profilePath` 必填，且只能是以 `/` 开头、以 `profile.tgz` 结尾的逻辑路径；不得传 `s3://`、`file://`、`http://` 等协议型路径
+- profile 存储后端由配置层统一决定：`s3` 模式使用 `BROWSERD_PROFILE_BUCKET`，`file` 模式使用 `BROWSERD_PROFILE_FILE_ROOT`
 - seed-only 请求不再支持；缺失或不完整时直接返回 `INVALID_FINGERPRINT_CONFIG`
 - browserd 不从 seed 推导运行时配置；调用方必须把数据库中的完整 fingerprint 配置传入本接口
 - `screenWidth` / `screenHeight` 是 live Xvfb/VNC 桌面尺寸，也是 Chromium `--window-size` 的唯一来源
@@ -111,7 +116,7 @@ Content-Type: application/json
 说明：
 - `navigate` 是唯一的页面跳转接口，不新增 `relocation` 同义接口。
 - `afterLoadScreenshotS3Path` 为可选字段，必须传完整 `s3://bucket/key`。
-- 截图 bucket 不从 `s3ProfilePath` 推导，允许与 userdata bucket 不同。
+- 截图 bucket 不从 `profilePath` 推导，允许与 userdata bucket 不同。
 
 ### Snapshot
 ```http

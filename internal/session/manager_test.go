@@ -52,7 +52,7 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	}
 
 	store := profile.NewMemoryStore()
-	profilePath := "s3://private/browser-sessions/t1/c1/s1/profile.tgz"
+	profilePath := "/browser-sessions/t1/c1/s1/profile.tgz"
 	store.Seed(profilePath, seedData, "v1")
 
 	mgr := NewManager(ManagerOptions{
@@ -62,8 +62,8 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	})
 
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath: profilePath,
-		Fingerprint:   testFingerprintConfig(),
+		ProfilePath: profilePath,
+		Fingerprint: testFingerprintConfig(),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -84,10 +84,10 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 	}
 }
 
-func TestManager_CreateAcceptsGenericProfilePath(t *testing.T) {
+func TestManager_CreateAcceptsLogicalProfilePath(t *testing.T) {
 	tmp := t.TempDir()
 	store := profile.NewMemoryStore()
-	profilePath := "file://browser-sessions/dev/douyin/local/profile.tgz"
+	profilePath := "/browser-sessions/dev/douyin/local/profile.tgz"
 	mgr := NewManager(ManagerOptions{
 		Store:      store,
 		Workdir:    filepath.Join(tmp, "work"),
@@ -120,7 +120,7 @@ func TestManager_CreateAcceptsGenericProfilePath(t *testing.T) {
 func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 	tmp := t.TempDir()
 	store := profile.NewMemoryStore()
-	profilePath := "s3://private/browser-sessions/t2/c2/s2/profile.tgz"
+	profilePath := "/browser-sessions/t2/c2/s2/profile.tgz"
 	seedDir := filepath.Join(tmp, "seed2")
 	if err := os.MkdirAll(seedDir, 0o755); err != nil {
 		t.Fatalf("mkdir seed2: %v", err)
@@ -144,8 +144,8 @@ func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath: profilePath,
-		Fingerprint:   testFingerprintConfig(),
+		ProfilePath: profilePath,
+		Fingerprint: testFingerprintConfig(),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -167,8 +167,38 @@ func TestManager_CreateRejectsNonProfileTGZPath(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	_, err := mgr.Create(CreateInput{
-		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.zip",
-		Fingerprint:   testFingerprintConfig(),
+		ProfilePath: "/browser-sessions/t/c/s/profile.zip",
+		Fingerprint: testFingerprintConfig(),
+	})
+	if err == nil {
+		t.Fatalf("expected invalid request")
+	}
+}
+
+func TestManager_CreateRejectsProfilePathWithoutLeadingSlash(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	_, err := mgr.Create(CreateInput{
+		ProfilePath: "browser-sessions/t/c/s/profile.tgz",
+		Fingerprint: testFingerprintConfig(),
+	})
+	if err == nil {
+		t.Fatalf("expected invalid request")
+	}
+}
+
+func TestManager_CreateRejectsProfilePathWithScheme(t *testing.T) {
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	_, err := mgr.Create(CreateInput{
+		ProfilePath: "s3://private/browser-sessions/t/c/s/profile.tgz",
+		Fingerprint: testFingerprintConfig(),
 	})
 	if err == nil {
 		t.Fatalf("expected invalid request")
@@ -182,7 +212,7 @@ func TestManager_CreateRejectsMissingFingerprintConfig(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	_, err := mgr.Create(CreateInput{
-		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.tgz",
+		ProfilePath: "/browser-sessions/t/c/s/profile.tgz",
 	})
 	if err == nil {
 		t.Fatalf("expected invalid request")
@@ -199,9 +229,9 @@ func TestManager_CreateStoresFingerprintAndProxyServer(t *testing.T) {
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		S3ProfilePath: "s3://private/browser-sessions/t/c/s/profile.tgz",
-		Fingerprint:   testFingerprintConfig(),
-		ProxyServer:   "http://user:pass@proxy.example.com:8080",
+		ProfilePath: "/browser-sessions/t/c/s/profile.tgz",
+		Fingerprint: testFingerprintConfig(),
+		ProxyServer: "http://user:pass@proxy.example.com:8080",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -220,7 +250,7 @@ func TestManager_CreateStoresFingerprintAndProxyServer(t *testing.T) {
 
 func TestMemoryStore_PutRequiresIfMatch(t *testing.T) {
 	store := profile.NewMemoryStore()
-	path := "s3://private/browser-sessions/t/c/s/profile.tgz"
+	path := "/browser-sessions/t/c/s/profile.tgz"
 	store.Seed(path, []byte("x"), "v1")
 	_, err := store.Put(context.Background(), path, []byte("y"), "stale")
 	if err == nil {

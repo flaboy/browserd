@@ -75,12 +75,12 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 		t.Skip("BROWSERD_BASE_URL not set")
 	}
 
-	profilePath := "s3://private/browser-sessions/team_e2e/case_e2e/bs_e2e/profile.tgz"
+	profilePath := "/browser-sessions/team_e2e/case_e2e/bs_e2e/profile.tgz"
 	createURL := base + "/v1/sessions"
 
 	status, createEnv := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
-		"s3ProfilePath": profilePath,
-		"fingerprint":   smokeFingerprint(),
+		"profilePath": profilePath,
+		"fingerprint": smokeFingerprint(),
 	})
 	if status != http.StatusOK {
 		t.Fatalf("create status=%d err=%v", status, createEnv.Error)
@@ -139,7 +139,7 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	}
 
 	status, create2Env := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
-		"s3ProfilePath":   profilePath,
+		"profilePath":     profilePath,
 		"fingerprint":     smokeFingerprint(),
 		"expectedVersion": newVersion,
 	})

@@ -15,7 +15,7 @@ func TestReadPageSmoke_BaiduSnapshotPage(t *testing.T) {
 	}
 
 	status, createEnv := mustDoJSON(t, http.MethodPost, base+"/v1/sessions", map[string]any{
-		"s3ProfilePath":   "s3://private/browser-sessions/team_e2e/case_e2e/read_page/profile.tgz",
+		"profilePath":     "/browser-sessions/team_e2e/case_e2e/read_page/profile.tgz",
 		"fingerprintSeed": "fp_read_page_smoke",
 		"leaseId":         "lease_read_page_smoke",
 	})

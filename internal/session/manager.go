@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,7 +24,6 @@ var (
 
 type CreateInput struct {
 	ProfilePath     string
-	S3ProfilePath   string
 	ExpectedVersion string
 	LeaseID         string
 	TTLSeconds      int
@@ -113,14 +113,8 @@ func NewManager(opts ManagerOptions) Manager {
 }
 
 func (m *manager) Create(input CreateInput) (CreateOutput, error) {
-	profilePath := strings.TrimSpace(input.ProfilePath)
-	if profilePath == "" {
-		profilePath = strings.TrimSpace(input.S3ProfilePath)
-	}
-	if profilePath == "" {
-		return CreateOutput{}, ErrInvalidRequest
-	}
-	if !strings.HasSuffix(profilePath, "profile.tgz") {
+	profilePath, err := normalizeProfilePath(input.ProfilePath)
+	if err != nil {
 		return CreateOutput{}, ErrInvalidRequest
 	}
 	fp := input.Fingerprint.Normalized()
@@ -227,6 +221,36 @@ func (m *manager) Commit(runtimeSessionID string, input CommitInput) (CommitOutp
 		Bytes:      int64(len(buf)),
 		DurationMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+func normalizeProfilePath(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", ErrInvalidRequest
+	}
+	if strings.Contains(trimmed, "://") {
+		return "", ErrInvalidRequest
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", ErrInvalidRequest
+	}
+	key := strings.Trim(trimmed, "/")
+	if key == "" {
+		return "", ErrInvalidRequest
+	}
+	for _, segment := range strings.Split(key, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", ErrInvalidRequest
+		}
+	}
+	cleanKey := path.Clean(key)
+	if cleanKey == "." || cleanKey == ".." || strings.HasPrefix(cleanKey, "../") || path.IsAbs(cleanKey) {
+		return "", ErrInvalidRequest
+	}
+	if !strings.HasSuffix(cleanKey, "profile.tgz") {
+		return "", ErrInvalidRequest
+	}
+	return "/" + cleanKey, nil
 }
 
 func (m *manager) Delete(runtimeSessionID string) error {

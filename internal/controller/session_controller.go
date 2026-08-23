@@ -114,7 +114,6 @@ func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionControl
 
 type createSessionRequest struct {
 	ProfilePath     string             `json:"profilePath,omitempty"`
-	S3ProfilePath   string             `json:"s3ProfilePath"`
 	ExpectedVersion string             `json:"expectedVersion,omitempty"`
 	TTLSeconds      int                `json:"ttlSec,omitempty"`
 	LeaseID         string             `json:"leaseId,omitempty"`
@@ -214,8 +213,7 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out, err := h.manager.Create(session.CreateInput{
-		ProfilePath:     firstNonEmpty(req.ProfilePath, req.S3ProfilePath),
-		S3ProfilePath:   req.S3ProfilePath,
+		ProfilePath:     req.ProfilePath,
 		ExpectedVersion: req.ExpectedVersion,
 		TTLSeconds:      req.TTLSeconds,
 		LeaseID:         req.LeaseID,

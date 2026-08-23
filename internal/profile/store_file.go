@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -119,32 +118,13 @@ func parseFileStoreURI(uri string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("file profile path is required")
 	}
-	u, err := url.Parse(trimmed)
-	if err != nil {
-		return "", err
+	if strings.Contains(trimmed, "://") {
+		return "", fmt.Errorf("file profile path must be logical path without scheme")
 	}
-	if u.Scheme != "file" {
-		return "", fmt.Errorf("invalid file profile uri scheme: %s", u.Scheme)
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", fmt.Errorf("file profile path must start with /")
 	}
-	if u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("file profile uri must not contain query or fragment")
-	}
-	host, err := url.PathUnescape(u.Host)
-	if err != nil {
-		return "", err
-	}
-	uriPath, err := url.PathUnescape(u.Path)
-	if err != nil {
-		return "", err
-	}
-	parts := []string{}
-	if host != "" {
-		parts = append(parts, host)
-	}
-	if strings.Trim(uriPath, "/") != "" {
-		parts = append(parts, strings.Trim(uriPath, "/"))
-	}
-	key := strings.Join(parts, "/")
+	key := strings.Trim(trimmed, "/")
 	if key == "" {
 		return "", fmt.Errorf("file profile key is required")
 	}

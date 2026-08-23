@@ -15,7 +15,7 @@ func TestFileStorePutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
-	path := "file://browser-sessions/dev/douyin/local/profile.tgz"
+	path := "/browser-sessions/dev/douyin/local/profile.tgz"
 	body := []byte("profile archive")
 
 	version, err := store.Put(context.Background(), path, body, "new")
@@ -41,18 +41,14 @@ func TestFileStorePutGetRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileStoreSupportsTripleSlashFileURI(t *testing.T) {
+func TestFileStoreRejectsFileURI(t *testing.T) {
 	store, err := NewFileStore(FileStoreConfig{Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
 	path := "file:///browser-sessions/dev/xhs/local/profile.tgz"
-	version, err := store.Put(context.Background(), path, []byte("x"), "new")
-	if err != nil {
-		t.Fatalf("put: %v", err)
-	}
-	if version == "" {
-		t.Fatalf("expected version")
+	if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err == nil {
+		t.Fatalf("expected file uri to fail")
 	}
 }
 
@@ -62,9 +58,9 @@ func TestFileStoreRejectsPathTraversal(t *testing.T) {
 		t.Fatalf("new file store: %v", err)
 	}
 	for _, path := range []string{
-		"file://browser-sessions/../outside/profile.tgz",
-		"file:///../outside/profile.tgz",
-		"file://browser-sessions/dev/%2e%2e/outside/profile.tgz",
+		"/browser-sessions/../outside/profile.tgz",
+		"/../outside/profile.tgz",
+		"/browser-sessions/dev/../outside/profile.tgz",
 	} {
 		if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err == nil {
 			t.Fatalf("expected traversal path to fail: %s", path)
@@ -72,13 +68,13 @@ func TestFileStoreRejectsPathTraversal(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsNonFileURI(t *testing.T) {
+func TestFileStoreRejectsSchemeURI(t *testing.T) {
 	store, err := NewFileStore(FileStoreConfig{Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
 	if _, _, _, err := store.Get(context.Background(), "s3://private/browser-sessions/a/profile.tgz"); err == nil {
-		t.Fatalf("expected non-file uri to fail")
+		t.Fatalf("expected scheme uri to fail")
 	}
 }
 
@@ -87,7 +83,7 @@ func TestFileStoreRejectsStaleIfMatchVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
-	path := "file://browser-sessions/dev/douyin/local/profile.tgz"
+	path := "/browser-sessions/dev/douyin/local/profile.tgz"
 	if _, err := store.Put(context.Background(), path, []byte("v1"), "new"); err != nil {
 		t.Fatalf("put initial: %v", err)
 	}
@@ -103,7 +99,7 @@ func TestFileStorePersistsOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
-	path := "file://browser-sessions/dev/douyin/local/profile.tgz"
+	path := "/browser-sessions/dev/douyin/local/profile.tgz"
 	if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err != nil {
 		t.Fatalf("put: %v", err)
 	}

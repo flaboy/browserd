@@ -27,6 +27,7 @@ func New(cfg config.Config) http.Handler {
 			AccessKeyID:     cfg.S3AccessKeyID,
 			SecretAccessKey: cfg.S3SecretAccessKey,
 			ForcePathStyle:  cfg.S3ForcePathStyle,
+			Bucket:          cfg.ProfileBucket,
 		})
 		if err != nil {
 			log.Fatalf("browserd: init %s profile store failed: %v", cfg.ProfileStore, err)

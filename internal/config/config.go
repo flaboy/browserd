@@ -20,6 +20,7 @@ type Config struct {
 	S3AccessKeyID     string
 	S3SecretAccessKey string
 	S3ForcePathStyle  bool
+	ProfileBucket     string
 	ProfileFileRoot   string
 	ProxyHop          string
 	ProxyWorkerURL    string
@@ -81,9 +82,19 @@ func Load() Config {
 		S3AccessKeyID:     strings.TrimSpace(os.Getenv("BROWSERD_S3_ACCESS_KEY_ID")),
 		S3SecretAccessKey: strings.TrimSpace(os.Getenv("BROWSERD_S3_SECRET_ACCESS_KEY")),
 		S3ForcePathStyle:  forcePathStyle,
+		ProfileBucket:     firstNonEmpty(strings.TrimSpace(os.Getenv("BROWSERD_PROFILE_BUCKET")), "private"),
 		ProfileFileRoot:   strings.TrimSpace(os.Getenv("BROWSERD_PROFILE_FILE_ROOT")),
 		ProxyHop:          proxyHop,
 		ProxyWorkerURL:    proxyWorkerURL,
 		ProxyWorkerToken:  proxyWorkerToken,
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

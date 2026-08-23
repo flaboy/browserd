@@ -225,7 +225,7 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	body := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"leaseId":"lease_1"
 	}`)
@@ -251,7 +251,7 @@ func TestCreateSession_ReturnsCdpWsUrlAndLeaseEcho(t *testing.T) {
 	}
 }
 
-func TestCreateSession_AcceptsGenericProfilePath(t *testing.T) {
+func TestCreateSession_AcceptsLogicalProfilePath(t *testing.T) {
 	manager := &fakeSessionManager{
 		createOut: session.CreateOutput{
 			RuntimeSessionID: "rt_1",
@@ -263,7 +263,7 @@ func TestCreateSession_AcceptsGenericProfilePath(t *testing.T) {
 	controller := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"profilePath":"file://browser-sessions/dev/douyin/local/profile.tgz",
+		"profilePath":"/browser-sessions/dev/douyin/local/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -276,7 +276,7 @@ func TestCreateSession_AcceptsGenericProfilePath(t *testing.T) {
 	if len(manager.createCalls) != 1 {
 		t.Fatalf("expected one create call, got %+v", manager.createCalls)
 	}
-	if manager.createCalls[0].ProfilePath != "file://browser-sessions/dev/douyin/local/profile.tgz" {
+	if manager.createCalls[0].ProfilePath != "/browser-sessions/dev/douyin/local/profile.tgz" {
 		t.Fatalf("profile path was not forwarded: %+v", manager.createCalls[0])
 	}
 }
@@ -294,7 +294,7 @@ func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -325,7 +325,7 @@ func TestCreateSession_DeletesSessionWhenBrowserPrepareFails(t *testing.T) {
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -356,7 +356,7 @@ func TestCreateSession_ProxyHopFailureReturnsSpecificError(t *testing.T) {
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"proxyServer":"http://user:pass@proxy.example.com:8080"
 	}`)))
@@ -385,7 +385,7 @@ func TestCreateSession_PrepareFailureRemovesRuntimeSessionFromManager(t *testing
 	controller := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -411,7 +411,7 @@ func TestCreateSession_RequiresFingerprintConfig(t *testing.T) {
 	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz"
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -430,7 +430,7 @@ func TestCreateSession_RejectsInvalidProxyServer(t *testing.T) {
 	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"proxyServer":"https://proxy.example.com:443"
 	}`)))
@@ -461,7 +461,7 @@ func TestCreateSession_ForwardsFingerprintAndProxyServer(t *testing.T) {
 	handler := controller.NewSessionController(manager, nil, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"},
 		"proxyServer":"http://user:pass@proxy.example.com:8080"
 	}`)))
@@ -493,7 +493,7 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
@@ -527,7 +527,7 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	create := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/t_1/c_1/bs_1/profile.tgz",
+		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
@@ -960,7 +960,7 @@ func TestUploadFiles_MapsFailureCode(t *testing.T) {
 	})
 	rid := createTestSession(t, handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{"ref":"file_1","files":[{"s3Path":"s3://bucket/key.png"}]}`)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/upload-files", bytes.NewReader([]byte(`{"ref":"file_1","files":[{"s3Path":"/key.png"}]}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.UploadFiles(rr, req, rid)
@@ -1399,7 +1399,7 @@ func createTestSession(t *testing.T, handler *controller.SessionController) stri
 	t.Helper()
 
 	body := []byte(`{
-		"s3ProfilePath":"s3://bucket/browser-sessions/opaque/profile.tgz",
+		"profilePath":"/browser-sessions/opaque/profile.tgz",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(body))
