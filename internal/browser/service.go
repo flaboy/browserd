@@ -1021,19 +1021,13 @@ func (s *Service) trustedPaste(ctx context.Context, runtimeSessionID string, inp
 			}
 		}
 	}
+	if strings.TrimSpace(input.HTML) == "" && strings.TrimSpace(input.Text) != "" {
+		return trustedInsertText(ctx, input.Text)
+	}
 	if err := s.writeClipboard(ctx, input.Text, input.HTML); err != nil {
-		if strings.TrimSpace(input.HTML) == "" && strings.TrimSpace(input.Text) != "" {
-			return trustedInsertText(ctx, input.Text)
-		}
 		return err
 	}
-	if err := keyEventAction(textInputKey{Key: "v", Modifiers: cdinput.ModifierCtrl}).Do(ctx); err != nil {
-		if strings.TrimSpace(input.HTML) == "" && strings.TrimSpace(input.Text) != "" {
-			return trustedInsertText(ctx, input.Text)
-		}
-		return err
-	}
-	return nil
+	return keyEventAction(textInputKey{Key: "v", Modifiers: cdinput.ModifierCtrl}).Do(ctx)
 }
 
 func (s *Service) writeClipboard(ctx context.Context, text string, html string) error {
