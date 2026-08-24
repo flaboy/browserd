@@ -1,11 +1,24 @@
 import RFB from '@novnc/novnc/lib/rfb.js'
+import keysyms from '@novnc/novnc/lib/input/keysym.js'
+import keysymdef from '@novnc/novnc/lib/input/keysymdef.js'
 import './style.css'
 
 const statusEl = document.querySelector<HTMLDivElement>('#status')
 const screenEl = document.querySelector<HTMLDivElement>('#screen')
 const pointerEl = document.querySelector<HTMLDivElement>('#virtual-pointer')
+const mobileKeyboardEl = document.querySelector<HTMLDivElement>('#mobile-keyboard')
+const mobileKeyboardInput = document.querySelector<HTMLTextAreaElement>('#mobile-keyboard-input')
+const mobileKeyboardButton = document.querySelector<HTMLButtonElement>('#mobile-keyboard-button')
+const mobileKeyboardToolbar = document.querySelector<HTMLDivElement>('#mobile-keyboard-toolbar')
 let lastPointerSnapshot: PointerSnapshot | null = null
 let pointerRenderRetry = 0
+let mobileKeyboardComposing = false
+
+type RFBClient = {
+  clipboardPasteFrom: (text: string) => void
+  sendKey: (keysym: number, code?: string, down?: boolean) => void
+  focus: (options?: FocusOptions) => void
+}
 
 type PointerSnapshot = {
   x: number
@@ -144,6 +157,161 @@ function connectPointerOverlay() {
   window.addEventListener('resize', renderLastPointer)
 }
 
+const specialKeys: Record<string, { keysym: number; code: string }> = {
+  Backspace: { keysym: keysyms.XK_BackSpace, code: 'Backspace' },
+  Enter: { keysym: keysyms.XK_Return, code: 'Enter' },
+  Tab: { keysym: keysyms.XK_Tab, code: 'Tab' },
+  Escape: { keysym: keysyms.XK_Escape, code: 'Escape' },
+}
+
+function mobileVirtualKeyboard(): { overlaysContent?: boolean; show?: () => void; hide?: () => void; boundingRect?: DOMRect } | null {
+  return 'virtualKeyboard' in navigator
+    ? ((navigator as Navigator & {
+        virtualKeyboard?: { overlaysContent?: boolean; show?: () => void; hide?: () => void; boundingRect?: DOMRect }
+      }).virtualKeyboard ?? null)
+    : null
+}
+
+function updateMobileKeyboardInset() {
+  const viewport = window.visualViewport
+  const viewportInset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0
+  const keyboardInset = mobileVirtualKeyboard()?.boundingRect?.height ?? 0
+  document.documentElement.style.setProperty('--mobile-keyboard-inset', `${Math.max(viewportInset, keyboardInset)}px`)
+}
+
+function focusMobileKeyboardInput(showKeyboard = true) {
+  if (!mobileKeyboardInput) return
+  mobileKeyboardEl?.setAttribute('data-active', 'true')
+  mobileKeyboardInput.focus({ preventScroll: true })
+  mobileKeyboardInput.setSelectionRange(mobileKeyboardInput.value.length, mobileKeyboardInput.value.length)
+  if (showKeyboard) {
+    mobileVirtualKeyboard()?.show?.()
+  }
+  updateMobileKeyboardInset()
+}
+
+function blurMobileKeyboardInput() {
+  mobileKeyboardInput?.blur()
+  mobileKeyboardEl?.setAttribute('data-active', 'false')
+  mobileVirtualKeyboard()?.hide?.()
+  updateMobileKeyboardInset()
+}
+
+function sendSpecialKey(rfb: RFBClient, key: string) {
+  const special = specialKeys[key]
+  if (!special) return
+  rfb.sendKey(special.keysym, special.code)
+}
+
+function shouldPasteText(text: string): boolean {
+  return Array.from(text).length > 1 || Array.from(text).some((char) => (char.codePointAt(0) ?? 0) > 0x7e)
+}
+
+function sendPasteShortcut(rfb: RFBClient) {
+  rfb.sendKey(keysyms.XK_Control_L, 'ControlLeft', true)
+  rfb.sendKey(keysyms.XK_v, 'KeyV')
+  rfb.sendKey(keysyms.XK_Control_L, 'ControlLeft', false)
+}
+
+function sendText(rfb: RFBClient, text: string) {
+  if (shouldPasteText(text)) {
+    rfb.clipboardPasteFrom(text)
+    window.setTimeout(() => sendPasteShortcut(rfb), 60)
+    return
+  }
+  for (const char of Array.from(text)) {
+    if (char === '\n') {
+      sendSpecialKey(rfb, 'Enter')
+      continue
+    }
+    const codePoint = char.codePointAt(0)
+    if (codePoint === undefined) continue
+    rfb.sendKey(keysymdef.lookup(codePoint), '')
+  }
+}
+
+function flushMobileKeyboardInput(rfb: RFBClient) {
+  if (!mobileKeyboardInput || mobileKeyboardComposing) return
+  const text = mobileKeyboardInput.value
+  if (!text) return
+  mobileKeyboardInput.value = ''
+  sendText(rfb, text)
+}
+
+function connectMobileKeyboardBridge(rfb: RFBClient) {
+  if (!mobileKeyboardInput || !mobileKeyboardButton || !mobileKeyboardToolbar) return
+
+  const virtualKeyboard = mobileVirtualKeyboard()
+  if ('virtualKeyboard' in navigator && navigator.virtualKeyboard && 'overlaysContent' in navigator.virtualKeyboard) {
+    navigator.virtualKeyboard.overlaysContent = true
+  }
+
+  mobileKeyboardButton.addEventListener('pointerdown', (event) => {
+    event.preventDefault()
+    focusMobileKeyboardInput()
+  })
+  mobileKeyboardButton.addEventListener('click', (event) => {
+    event.preventDefault()
+    focusMobileKeyboardInput()
+  })
+
+  mobileKeyboardToolbar.addEventListener('pointerdown', (event) => {
+    const target = event.target as HTMLElement | null
+    const keyButton = target?.closest<HTMLButtonElement>('[data-key]')
+    const closeButton = target?.closest<HTMLButtonElement>('[data-mobile-keyboard-close]')
+    if (!keyButton && !closeButton) return
+    event.preventDefault()
+    if (closeButton) {
+      blurMobileKeyboardInput()
+      return
+    }
+    sendSpecialKey(rfb, keyButton.dataset.key ?? '')
+    focusMobileKeyboardInput()
+  })
+
+  mobileKeyboardInput.addEventListener('compositionstart', () => {
+    mobileKeyboardComposing = true
+  })
+  mobileKeyboardInput.addEventListener('compositionend', () => {
+    mobileKeyboardComposing = false
+    window.setTimeout(() => flushMobileKeyboardInput(rfb), 0)
+  })
+  mobileKeyboardInput.addEventListener('beforeinput', (event) => {
+    const inputEvent = event as InputEvent
+    if (inputEvent.isComposing) return
+    if (inputEvent.inputType === 'deleteContentBackward') {
+      event.preventDefault()
+      sendSpecialKey(rfb, 'Backspace')
+      return
+    }
+    if (inputEvent.inputType === 'insertLineBreak') {
+      event.preventDefault()
+      sendSpecialKey(rfb, 'Enter')
+    }
+  })
+  mobileKeyboardInput.addEventListener('input', (event) => {
+    const inputEvent = event as InputEvent
+    if (inputEvent.isComposing) return
+    flushMobileKeyboardInput(rfb)
+  })
+  mobileKeyboardInput.addEventListener('keydown', (event) => {
+    if (event.key in specialKeys) {
+      event.preventDefault()
+      sendSpecialKey(rfb, event.key)
+    }
+  })
+  mobileKeyboardInput.addEventListener('blur', () => {
+    mobileKeyboardEl?.setAttribute('data-active', 'false')
+    updateMobileKeyboardInset()
+  })
+
+  window.visualViewport?.addEventListener('resize', updateMobileKeyboardInset)
+  window.visualViewport?.addEventListener('scroll', updateMobileKeyboardInset)
+  virtualKeyboard?.addEventListener?.('geometrychange', updateMobileKeyboardInset)
+  window.addEventListener('resize', updateMobileKeyboardInset)
+  updateMobileKeyboardInset()
+}
+
 function connect() {
   if (!screenEl) {
     throw new Error('screen container is missing')
@@ -177,6 +345,7 @@ function connect() {
     setStatus('Credentials required', true)
   })
   connectPointerOverlay()
+  connectMobileKeyboardBridge(rfb)
 }
 
 try {

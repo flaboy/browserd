@@ -4,12 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Browser Live View</title>
-    <script type="module" crossorigin src="/browser-live/assets/index-CaxrEShe.js"></script>
-    <link rel="stylesheet" crossorigin href="/browser-live/assets/index-BLdX222X.css">
+    <script type="module" crossorigin src="/browser-live/assets/index-COeu3p4F.js"></script>
+    <link rel="stylesheet" crossorigin href="/browser-live/assets/index-BrXIj0_l.css">
   </head>
   <body>
     <div id="status" data-state="loading" role="img" aria-label="Connecting"></div>
     <div id="screen" aria-busy="true"></div>
+    <div id="mobile-keyboard" aria-hidden="false">
+      <textarea
+        id="mobile-keyboard-input"
+        autocomplete="off"
+        autocapitalize="none"
+        autocorrect="off"
+        spellcheck="false"
+        inputmode="text"
+        aria-label="Mobile keyboard input"
+      ></textarea>
+      <div id="mobile-keyboard-toolbar" aria-label="Keyboard controls">
+        <button type="button" id="mobile-keyboard-button" aria-label="Show keyboard">⌨</button>
+        <button type="button" data-key="Backspace" aria-label="Backspace">⌫</button>
+        <button type="button" data-key="Enter" aria-label="Enter">↵</button>
+        <button type="button" data-key="Tab" aria-label="Tab">⇥</button>
+        <button type="button" data-key="Escape" aria-label="Escape">Esc</button>
+        <button type="button" data-mobile-keyboard-close aria-label="Hide keyboard">✓</button>
+      </div>
+    </div>
     <div id="virtual-pointer" aria-hidden="true">
       <svg class="virtual-pointer__icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
         <path
