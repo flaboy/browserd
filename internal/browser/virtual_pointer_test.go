@@ -5,7 +5,7 @@ import "testing"
 func TestVirtualPointerSnapshotIsSanitized(t *testing.T) {
 	state := pointerState{
 		Point:       pointerPoint{X: 42.5, Y: 81.25},
-		Viewport:    viewportRect{Width: 1366, Height: 768},
+		Viewport:    viewportRect{Width: 1366, Height: 768, ContentOffsetX: 4, ContentOffsetY: 128},
 		Initialized: true,
 		ButtonDown:  true,
 	}
@@ -21,6 +21,9 @@ func TestVirtualPointerSnapshotIsSanitized(t *testing.T) {
 	if got.ViewportWidth != 1366 || got.ViewportHeight != 768 {
 		t.Fatalf("unexpected viewport: %+v", got)
 	}
+	if got.ContentOffsetX != 4 || got.ContentOffsetY != 128 {
+		t.Fatalf("expected content offset in snapshot: %+v", got)
+	}
 	if !got.Visible || !got.ButtonDown {
 		t.Fatalf("expected visible button-down pointer: %+v", got)
 	}
@@ -28,7 +31,7 @@ func TestVirtualPointerSnapshotIsSanitized(t *testing.T) {
 
 func TestPointerSnapshotReturnsLatestVirtualPointer(t *testing.T) {
 	svc := NewServiceWithOptions(ServiceOptions{})
-	svc.setPointer("rt_1", pointerPoint{X: 10, Y: 20}, viewportRect{Width: 100, Height: 80})
+	svc.setPointer("rt_1", pointerPoint{X: 10, Y: 20}, viewportRect{Width: 100, Height: 80, ContentOffsetY: 12})
 
 	got, ok := svc.PointerSnapshot("rt_1")
 
@@ -38,8 +41,34 @@ func TestPointerSnapshotReturnsLatestVirtualPointer(t *testing.T) {
 	if got.X != 10 || got.Y != 20 || got.ViewportWidth != 100 || got.ViewportHeight != 80 {
 		t.Fatalf("unexpected snapshot: %+v", got)
 	}
+	if got.ContentOffsetY != 12 {
+		t.Fatalf("expected content offset in snapshot: %+v", got)
+	}
 	if !got.Visible {
 		t.Fatalf("expected visible pointer: %+v", got)
+	}
+}
+
+func TestInitializePointerAtViewportCenter(t *testing.T) {
+	svc := NewServiceWithOptions(ServiceOptions{})
+
+	svc.initializePointerCenter("rt_1", FingerprintConfig{
+		ViewportWidth:  1366,
+		ViewportHeight: 768,
+	})
+
+	got, ok := svc.PointerSnapshot("rt_1")
+	if !ok {
+		t.Fatal("expected initial pointer snapshot")
+	}
+	if got.X != 683 || got.Y != 384 {
+		t.Fatalf("expected centered pointer, got %+v", got)
+	}
+	if got.ViewportWidth != 1366 || got.ViewportHeight != 768 {
+		t.Fatalf("unexpected viewport: %+v", got)
+	}
+	if !got.Visible || got.ButtonDown {
+		t.Fatalf("expected visible pointer with no button press: %+v", got)
 	}
 }
 

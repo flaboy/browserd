@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -961,7 +962,7 @@ func (s *Service) trustedScroll(ctx context.Context, runtimeSessionID string, in
 		return ErrInvalidRequest
 	}
 	viewport := viewportRect{Width: 1366, Height: 768}
-	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
+	_ = chromedp.Run(ctx, chromedp.Evaluate(runtimeViewportRectScript(1366, 768), &viewport))
 	x := input.X
 	y := input.Y
 	if x <= 0 {
@@ -1132,14 +1133,14 @@ func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID strin
 		if err := sleepBehavior(ctx, profile.MouseBeforeDownDelay); err != nil {
 			return err
 		}
-		if err := cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
+		if err := cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithButtons(mouseButtonsBitfield(button)).WithClickCount(clickCount).Do(ctx); err != nil {
 			return err
 		}
 		s.setPointerButton(runtimeSessionID, end, viewport, true)
 		if err := sleepBehavior(ctx, profile.MouseDownUpDelay); err != nil {
 			return err
 		}
-		if err := cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithClickCount(clickCount).Do(ctx); err != nil {
+		if err := cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithButtons(0).WithClickCount(clickCount).Do(ctx); err != nil {
 			return err
 		}
 		s.setPointerButton(runtimeSessionID, end, viewport, false)
@@ -1150,20 +1151,48 @@ func (s *Service) trustedClickTarget(ctx context.Context, runtimeSessionID strin
 	return nil
 }
 
+func mouseButtonsBitfield(button cdinput.MouseButton) int64 {
+	switch button {
+	case cdinput.Left:
+		return 1
+	case cdinput.Right:
+		return 2
+	case cdinput.Middle:
+		return 4
+	default:
+		return 0
+	}
+}
+
+const trustedMouseMoveDispatchIntervalPX = 24.0
+
+func shouldDispatchTrustedMouseMove(lastDispatched pointerPoint, point pointerPoint, final bool) bool {
+	if final {
+		return true
+	}
+	return math.Hypot(point.X-lastDispatched.X, point.Y-lastDispatched.Y) >= trustedMouseMoveDispatchIntervalPX
+}
+
 func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string, target browserTarget, input ActInput) (pointerPoint, viewportRect, error) {
 	profile := defaultBehaviorProfile()
 	viewport := viewportRect{Width: 1366, Height: 768}
-	_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => ({ width: window.innerWidth || 1366, height: window.innerHeight || 768 }))()`, &viewport))
+	_ = chromedp.Run(ctx, chromedp.Evaluate(runtimeViewportRectScript(1366, 768), &viewport))
 	start := s.pointerStart(runtimeSessionID, viewport)
-	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile)
+	path := planPointerPath(start, target.Rect, viewport, input.MotionProfile, profile.MouseMoveStepDelay)
 	if len(path) == 0 {
 		return pointerPoint{}, viewportRect{}, ErrInvalidRequest
 	}
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		for _, point := range path {
-			if err := cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx); err != nil {
-				return err
+		lastDispatched := start
+		for index, point := range path {
+			final := index == len(path)-1
+			if shouldDispatchTrustedMouseMove(lastDispatched, point, final) {
+				if err := cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx); err != nil {
+					return err
+				}
+				lastDispatched = point
 			}
+			s.setPointer(runtimeSessionID, point, viewport)
 			if err := sleepBehavior(ctx, profile.MouseMoveStepDelay); err != nil {
 				return err
 			}
@@ -1175,6 +1204,25 @@ func (s *Service) trustedMoveTarget(ctx context.Context, runtimeSessionID string
 	end := path[len(path)-1]
 	s.setPointer(runtimeSessionID, end, viewport)
 	return end, viewport, nil
+}
+
+func runtimeViewportRectScript(fallbackWidth float64, fallbackHeight float64) string {
+	return fmt.Sprintf(`(() => {
+      const innerWidth = window.innerWidth || %f;
+      const innerHeight = window.innerHeight || %f;
+      const outerWidth = window.outerWidth || innerWidth;
+      const outerHeight = window.outerHeight || innerHeight;
+      const screenX = window.screenX || window.screenLeft || 0;
+      const screenY = window.screenY || window.screenTop || 0;
+      const sideChrome = Math.max(0, (outerWidth - innerWidth) / 2);
+      const topChrome = Math.max(0, outerHeight - innerHeight);
+      return {
+        width: innerWidth,
+        height: innerHeight,
+        contentOffsetX: Math.max(0, screenX + sideChrome),
+        contentOffsetY: Math.max(0, screenY + topChrome)
+      };
+    })()`, fallbackWidth, fallbackHeight)
 }
 
 func (s *Service) resolveActRef(ctx context.Context, runtimeSessionID string, ref string) (browserTarget, error) {
@@ -1227,6 +1275,18 @@ func (s *Service) pointerStart(runtimeSessionID string, viewport viewportRect) p
 		return clampPoint(state.Point, viewport)
 	}
 	return pointerPoint{X: viewport.Width * 0.35, Y: viewport.Height * 0.35}
+}
+
+func (s *Service) initializePointerCenter(runtimeSessionID string, fp FingerprintConfig) {
+	viewport := viewportRect{Width: float64(fp.ViewportWidth), Height: float64(fp.ViewportHeight)}
+	s.initializePointerCenterViewport(runtimeSessionID, viewport)
+}
+
+func (s *Service) initializePointerCenterViewport(runtimeSessionID string, viewport viewportRect) {
+	if viewport.Width <= 0 || viewport.Height <= 0 {
+		return
+	}
+	s.setPointer(runtimeSessionID, pointerPoint{X: viewport.Width / 2, Y: viewport.Height / 2}, viewport)
 }
 
 func (s *Service) PointerSnapshot(runtimeSessionID string) (VirtualPointerSnapshot, bool) {
@@ -1822,6 +1882,7 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	cmd := exec.Command(chromeBin, buildChromeArgs(BrowserOptions{
 		UserDataDir:         info.ProfileDir,
 		Headless:            !liveEnabled,
+		KioskMode:           liveEnabled,
 		Fingerprint:         fp,
 		Proxy:               proxy,
 		ProxyOverrideServer: proxyOverride,
@@ -1894,6 +1955,9 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 	}
 	s.browsers[runtimeSessionID] = ab
 	s.mu.Unlock()
+	initialViewport := viewportRect{Width: float64(fp.ViewportWidth), Height: float64(fp.ViewportHeight)}
+	_ = chromedp.Run(pageCtx, chromedp.Evaluate(runtimeViewportRectScript(initialViewport.Width, initialViewport.Height), &initialViewport))
+	s.initializePointerCenterViewport(runtimeSessionID, initialViewport)
 	return ab, nil
 }
 
@@ -1931,6 +1995,7 @@ func jsStringArray(values []string) string {
 type BrowserOptions struct {
 	UserDataDir         string
 	Headless            bool
+	KioskMode           bool
 	Fingerprint         FingerprintConfig
 	Proxy               ProxyConfig
 	ProxyOverrideServer string
@@ -1966,7 +2031,11 @@ func buildChromeArgs(opts BrowserOptions) []string {
 	if opts.Headless {
 		args = append(args, "--headless=new")
 	}
-	args = append(args, "--user-data-dir="+opts.UserDataDir, "about:blank")
+	args = append(args, "--user-data-dir="+opts.UserDataDir)
+	if opts.KioskMode && !opts.Headless {
+		args = append(args, "--kiosk", "--start-fullscreen")
+	}
+	args = append(args, "about:blank")
 	return args
 }
 

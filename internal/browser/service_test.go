@@ -189,6 +189,26 @@ func TestBuildChromeArgs_HeadedWhenLiveViewEnabled(t *testing.T) {
 	}
 }
 
+func TestBuildChromeArgs_KioskModeHidesBrowserChrome(t *testing.T) {
+	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: false, KioskMode: true})
+	if !containsArg(args, "--kiosk") {
+		t.Fatalf("expected kiosk mode to hide browser chrome, got %+v", args)
+	}
+	if args[len(args)-1] != "about:blank" {
+		t.Fatalf("expected kiosk mode bootstrap URL, got %+v", args)
+	}
+}
+
+func TestEnsureBrowserUsesKioskModeForLiveRuntime(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "KioskMode:           liveEnabled") {
+		t.Fatalf("live browser startup must enable kiosk mode so VNC coordinates match the page viewport")
+	}
+}
+
 func TestBuildChromeArgs_AppliesFingerprintAndProxyOptions(t *testing.T) {
 	proxy, err := ParseProxyServer("http://user:pass@proxy.example.com:8080")
 	if err != nil {
@@ -484,6 +504,63 @@ func TestAct_HoverUsesTrustedPointerMovement(t *testing.T) {
 	}
 	if strings.Contains(text, `new MouseEvent("mouseover"`) {
 		t.Fatalf("hover must not synthesize DOM mouse events")
+	}
+}
+
+func TestTrustedMoveTargetPublishesEveryPointerStep(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	required := "cdinput.DispatchMouseEvent(cdinput.MouseMoved, point.X, point.Y).WithButton(cdinput.None).Do(ctx)"
+	moveIndex := strings.Index(text, required)
+	if moveIndex < 0 {
+		t.Fatalf("trusted pointer movement missing mouse move dispatch")
+	}
+	publishIndex := strings.Index(text[moveIndex:], "s.setPointer(runtimeSessionID, point, viewport)")
+	sleepIndex := strings.Index(text[moveIndex:], "sleepBehavior(ctx, profile.MouseMoveStepDelay)")
+	if publishIndex < 0 {
+		t.Fatalf("trusted pointer movement must publish each intermediate pointer step")
+	}
+	if sleepIndex >= 0 && publishIndex > sleepIndex {
+		t.Fatalf("trusted pointer movement must publish each step before delaying")
+	}
+}
+
+func TestTrustedClickUsesPressedButtonsBitfield(t *testing.T) {
+	source, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "cdinput.DispatchMouseEvent(cdinput.MousePressed, end.X, end.Y).WithButton(button).WithButtons(mouseButtonsBitfield(button)).WithClickCount(clickCount).Do(ctx)") {
+		t.Fatalf("trusted click must send pressed mouse events with buttons bitfield")
+	}
+	if !strings.Contains(text, "cdinput.DispatchMouseEvent(cdinput.MouseReleased, end.X, end.Y).WithButton(button).WithButtons(0).WithClickCount(clickCount).Do(ctx)") {
+		t.Fatalf("trusted click must send released mouse events with cleared buttons bitfield")
+	}
+	for name, want := range map[string]string{
+		"Left":   "return 1",
+		"Right":  "return 2",
+		"Middle": "return 4",
+	} {
+		if !strings.Contains(text, "case cdinput."+name+":\n\t\t"+want) {
+			t.Fatalf("mouse button bitfield missing %s => %s", name, want)
+		}
+	}
+}
+
+func TestShouldDispatchTrustedMouseMoveThrottlesIntermediateMoves(t *testing.T) {
+	last := pointerPoint{X: 10, Y: 10}
+	if shouldDispatchTrustedMouseMove(last, pointerPoint{X: 20, Y: 10}, false) {
+		t.Fatalf("expected short intermediate move to be virtual-only")
+	}
+	if !shouldDispatchTrustedMouseMove(last, pointerPoint{X: 34, Y: 10}, false) {
+		t.Fatalf("expected sufficiently distant intermediate move to dispatch to CDP")
+	}
+	if !shouldDispatchTrustedMouseMove(last, pointerPoint{X: 11, Y: 10}, true) {
+		t.Fatalf("expected final move to dispatch exactly")
 	}
 }
 
