@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -281,6 +283,9 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
 	if h.browser != nil {
 		if err := h.browser.Checkpoint(runtimeSessionID); err != nil {
 			types.WriteErr(w, http.StatusServiceUnavailable, "PROFILE_CHECKPOINT_FAILED", err.Error())
@@ -303,6 +308,9 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 			types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
+	}
+	if err := h.manager.Delete(runtimeSessionID); err != nil && !errors.Is(err, session.ErrSessionNotFound) {
+		slog.Warn("delete committed browserd session failed", "runtime_session_id", runtimeSessionID, "error", err)
 	}
 	types.WriteOK(w, http.StatusOK, out)
 }
@@ -329,13 +337,16 @@ func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, run
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
-	if h.hasActiveHandoff(runtimeSessionID) {
-		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
-		return
-	}
 	var req navigateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	out, err := h.browser.Navigate(runtimeSessionID, browser.NavigateInput{
@@ -356,6 +367,9 @@ func (h *SessionController) Snapshot(w http.ResponseWriter, r *http.Request, run
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
 	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
 	if mode == "" {
 		mode = "refs"
@@ -373,13 +387,16 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
-	if h.hasActiveHandoff(runtimeSessionID) {
-		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
-		return
-	}
 	var req actRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	if len(req.Target) > 0 {
@@ -417,13 +434,16 @@ func (h *SessionController) WaitFor(w http.ResponseWriter, r *http.Request, runt
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
-	if h.hasActiveHandoff(runtimeSessionID) {
-		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
-		return
-	}
 	var req waitForRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	out, err := h.browser.WaitFor(runtimeSessionID, browser.WaitForInput{
@@ -449,6 +469,9 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
 	out, err := h.browser.Screenshot(runtimeSessionID, browser.ScreenshotInput{
 		Ref:      req.Ref,
 		FullPage: req.FullPage,
@@ -467,13 +490,16 @@ func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, 
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
 	}
-	if h.hasActiveHandoff(runtimeSessionID) {
-		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
-		return
-	}
 	var req uploadFilesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
 	files := make([]browser.UploadFileSource, 0, len(req.Files))
@@ -507,6 +533,9 @@ func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, run
 	var req evaluateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
 		return
 	}
 	if h.hasActiveHandoff(runtimeSessionID) && !req.AllowDuringHandoff {
@@ -589,6 +618,9 @@ func (h *SessionController) ServeLiveView(w http.ResponseWriter, r *http.Request
 		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
 		return
 	}
+	if !h.touchSession(w, state.RuntimeSessionID) {
+		return
+	}
 	if !h.isWebsockifyRequest(r, token) {
 		html, err := liveviewer.IndexHTML()
 		if err != nil {
@@ -624,6 +656,9 @@ func (h *SessionController) ServePointerEvents(w http.ResponseWriter, r *http.Re
 	state, ok := h.tokenStore.Lookup(token)
 	if !ok {
 		types.WriteErr(w, http.StatusGone, "LIVE_TOKEN_EXPIRED", "live view token is expired or revoked")
+		return
+	}
+	if !h.touchSession(w, state.RuntimeSessionID) {
 		return
 	}
 	runtime, ok := h.browser.(browserPointerRuntime)
@@ -697,6 +732,9 @@ func (h *SessionController) shouldTrackHandoffConnection(r *http.Request, token 
 }
 
 func (h *SessionController) beginHandoffConnection(runtimeSessionID string, handoffID string) {
+	if err := h.manager.Touch(runtimeSessionID); err != nil {
+		slog.Debug("touch browserd session on handoff connection", "runtime_session_id", runtimeSessionID, "error", err)
+	}
 	h.handoffsMu.Lock()
 	defer h.handoffsMu.Unlock()
 
@@ -815,7 +853,7 @@ func (h *SessionController) issueViewer(runtimeSessionID string, handoffID strin
 	if strings.TrimSpace(h.liveBaseURL) == "" {
 		return liveViewOutput{}, errLiveBaseURLMissing
 	}
-	if _, err := h.manager.Get(runtimeSessionID); err != nil {
+	if err := h.manager.Touch(runtimeSessionID); err != nil {
 		return liveViewOutput{}, err
 	}
 	permission := defaultPermission
@@ -889,6 +927,49 @@ func (h *SessionController) revokeRuntimeSession(runtimeSessionID string) {
 	}
 	h.handoffsMu.Unlock()
 	h.tokenStore.RevokeSession(runtimeSessionID)
+}
+
+func (h *SessionController) touchSession(w http.ResponseWriter, runtimeSessionID string) bool {
+	if err := h.manager.Touch(runtimeSessionID); err != nil {
+		writeBrowserErr(w, err)
+		return false
+	}
+	return true
+}
+
+func (h *SessionController) StartExpiredSessionReaper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				h.ReapExpiredSessions(now)
+			}
+		}
+	}()
+}
+
+func (h *SessionController) ReapExpiredSessions(now time.Time) int {
+	expired := h.manager.ClaimExpired(now)
+	for _, info := range expired {
+		runtimeSessionID := info.RuntimeSessionID
+		if h.browser != nil {
+			if err := h.browser.Close(runtimeSessionID); err != nil {
+				slog.Warn("close expired browserd session failed", "runtime_session_id", runtimeSessionID, "error", err)
+			}
+		}
+		h.revokeRuntimeSession(runtimeSessionID)
+		if err := h.manager.Delete(runtimeSessionID); err != nil && !errors.Is(err, session.ErrSessionNotFound) {
+			slog.Warn("delete expired browserd session failed", "runtime_session_id", runtimeSessionID, "error", err)
+		}
+	}
+	return len(expired)
 }
 
 func (h *SessionController) completeHandoff(runtimeSessionID string, handoffID string) bool {

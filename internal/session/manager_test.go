@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"browserd/internal/fingerprint"
 	"browserd/internal/profile"
@@ -245,6 +246,97 @@ func TestManager_CreateStoresFingerprintAndProxyServer(t *testing.T) {
 	}
 	if info.ProxyServer != "http://user:pass@proxy.example.com:8080" {
 		t.Fatalf("proxy server mismatch: %+v", info)
+	}
+}
+
+func TestManager_TouchExtendsIdleExpiration(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+		Now: func() time.Time {
+			return now
+		},
+	})
+	out, err := mgr.Create(CreateInput{
+		ProfilePath: "/browser-sessions/t/c/s/profile.tgz",
+		TTLSeconds:  60,
+		Fingerprint: testFingerprintConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	info, err := mgr.Get(out.RuntimeSessionID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !info.ExpiresAt.Equal(now.Add(60 * time.Second)) {
+		t.Fatalf("expiresAt mismatch after create: %s", info.ExpiresAt)
+	}
+
+	now = now.Add(30 * time.Second)
+	if err := mgr.Touch(out.RuntimeSessionID); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	info, err = mgr.Get(out.RuntimeSessionID)
+	if err != nil {
+		t.Fatalf("get after touch: %v", err)
+	}
+	if !info.LastActiveAt.Equal(now) || !info.ExpiresAt.Equal(now.Add(60*time.Second)) {
+		t.Fatalf("expected touch to refresh idle window, got lastActive=%s expires=%s", info.LastActiveAt, info.ExpiresAt)
+	}
+}
+
+func TestManager_ClaimExpiredPreventsReuseUntilDelete(t *testing.T) {
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	workdir := t.TempDir()
+	mgr := NewManager(ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    workdir,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+		Now: func() time.Time {
+			return now
+		},
+	})
+	out, err := mgr.Create(CreateInput{
+		ProfilePath: "/browser-sessions/t/c/s/profile.tgz",
+		TTLSeconds:  60,
+		Fingerprint: testFingerprintConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := mgr.Get(out.RuntimeSessionID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(info.ProfileDir)); err != nil {
+		t.Fatalf("session root must exist before delete: %v", err)
+	}
+
+	if expired := mgr.ClaimExpired(now.Add(59 * time.Second)); len(expired) != 0 {
+		t.Fatalf("session must not expire before idle TTL, got %+v", expired)
+	}
+	expired := mgr.ClaimExpired(now.Add(61 * time.Second))
+	if len(expired) != 1 || expired[0].RuntimeSessionID != out.RuntimeSessionID {
+		t.Fatalf("expected one expired session, got %+v", expired)
+	}
+	if _, err := mgr.Get(out.RuntimeSessionID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("claimed expired session must not be reused, got %v", err)
+	}
+	if err := mgr.Touch(out.RuntimeSessionID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("claimed expired session must not be touched, got %v", err)
+	}
+	if expired := mgr.ClaimExpired(now.Add(62 * time.Second)); len(expired) != 0 {
+		t.Fatalf("claimed session must not be claimed twice, got %+v", expired)
+	}
+	if err := mgr.Delete(out.RuntimeSessionID); err != nil {
+		t.Fatalf("delete claimed session: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(info.ProfileDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session root must be removed after delete, got %v", err)
 	}
 }
 

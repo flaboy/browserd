@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,10 +67,7 @@ func TestNew_RoutesUploadFiles(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code == http.StatusNotFound {
-		t.Fatalf("upload-files route was not registered: %s", rr.Body.String())
-	}
-	if strings.Contains(rr.Body.String(), "NOT_FOUND") {
+	if responseErrorCode(t, rr) == "NOT_FOUND" {
 		t.Fatalf("upload-files route returned not found: %s", rr.Body.String())
 	}
 }
@@ -82,12 +80,24 @@ func TestNew_RoutesWaitFor(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code == http.StatusNotFound {
-		t.Fatalf("wait-for route was not registered: %s", rr.Body.String())
-	}
-	if strings.Contains(rr.Body.String(), "NOT_FOUND") {
+	if responseErrorCode(t, rr) == "NOT_FOUND" {
 		t.Fatalf("wait-for route returned not found: %s", rr.Body.String())
 	}
+}
+
+func responseErrorCode(t *testing.T, rr *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errBody, ok := body["error"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	code, _ := errBody["code"].(string)
+	return code
 }
 
 func TestRouterRoutesPointerEventsBeforeGenericLiveView(t *testing.T) {

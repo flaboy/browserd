@@ -120,14 +120,20 @@ func (f *fakeBrowserRuntime) SubscribePointer(runtimeSessionID string) (browser.
 }
 
 type fakeSessionManager struct {
-	createOut   session.CreateOutput
-	createErr   error
-	createCalls []session.CreateInput
-	commitCalls []session.CommitInput
-	commitOut   session.CommitOutput
-	commitErr   error
-	deleteCalls []string
-	deleteErr   error
+	createOut    session.CreateOutput
+	createErr    error
+	createCalls  []session.CreateInput
+	commitCalls  []session.CommitInput
+	commitOut    session.CommitOutput
+	commitErr    error
+	deleteCalls  []string
+	deleteErr    error
+	getOut       session.SessionInfo
+	getErr       error
+	touchCalls   []string
+	touchErr     error
+	claimCalls   []time.Time
+	claimExpired []session.SessionInfo
 }
 
 func (f *fakeSessionManager) Create(input session.CreateInput) (session.CreateOutput, error) {
@@ -149,7 +155,100 @@ func (f *fakeSessionManager) Delete(runtimeSessionID string) error {
 }
 
 func (f *fakeSessionManager) Get(_ string) (session.SessionInfo, error) {
-	return session.SessionInfo{}, session.ErrSessionNotFound
+	if f.getErr != nil {
+		return session.SessionInfo{}, f.getErr
+	}
+	return f.getOut, nil
+}
+
+func (f *fakeSessionManager) Touch(runtimeSessionID string) error {
+	f.touchCalls = append(f.touchCalls, runtimeSessionID)
+	if f.touchErr != nil {
+		return f.touchErr
+	}
+	return nil
+}
+
+func (f *fakeSessionManager) ClaimExpired(now time.Time) []session.SessionInfo {
+	f.claimCalls = append(f.claimCalls, now)
+	return append([]session.SessionInfo(nil), f.claimExpired...)
+}
+
+func TestAct_TouchesSessionBeforeBrowserUse(t *testing.T) {
+	manager := &fakeSessionManager{}
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "click"}}
+	handler := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{"action":"click","x":10,"y":20}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.touchCalls) != 1 || manager.touchCalls[0] != "rt_1" {
+		t.Fatalf("expected session touch before browser use, got %+v", manager.touchCalls)
+	}
+	if len(browserRuntime.actCalls) != 1 {
+		t.Fatalf("expected browser act call, got %+v", browserRuntime.actCalls)
+	}
+}
+
+func TestAct_ReturnsNotFoundWhenTouchFails(t *testing.T) {
+	manager := &fakeSessionManager{touchErr: session.ErrSessionNotFound}
+	browserRuntime := &fakeBrowserRuntime{actOut: browser.ActOutput{OK: true, Action: "click"}}
+	handler := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/act", bytes.NewReader([]byte(`{"action":"click","x":10,"y":20}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Act(rr, req, "rt_1")
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.actCalls) != 0 {
+		t.Fatalf("browser runtime must not be called for expired session, got %+v", browserRuntime.actCalls)
+	}
+}
+
+func TestReapExpiredSessionsClosesRevokesAndDeletes(t *testing.T) {
+	store := live.NewTokenStore(live.TokenStoreOptions{})
+	token, _, err := store.Issue(live.IssueRequest{
+		RuntimeSessionID: "rt_1",
+		HandoffID:        "lv_1",
+		Permission:       live.PermissionControl,
+		TTL:              time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	manager := &fakeSessionManager{
+		claimExpired: []session.SessionInfo{{RuntimeSessionID: "rt_1"}},
+	}
+	browserRuntime := &fakeBrowserRuntime{}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:     manager,
+		Browser:     browserRuntime,
+		LiveBaseURL: "https://browser.example",
+		TokenStore:  store,
+	})
+
+	reaped := handler.ReapExpiredSessions(time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC))
+
+	if reaped != 1 {
+		t.Fatalf("expected one reaped session, got %d", reaped)
+	}
+	if len(browserRuntime.closeCalls) != 1 || browserRuntime.closeCalls[0] != "rt_1" {
+		t.Fatalf("expected browser close, got %+v", browserRuntime.closeCalls)
+	}
+	if len(manager.deleteCalls) != 1 || manager.deleteCalls[0] != "rt_1" {
+		t.Fatalf("expected manager delete, got %+v", manager.deleteCalls)
+	}
+	if _, ok := store.Lookup(token); ok {
+		t.Fatal("expected reaper to revoke live tokens for expired session")
+	}
 }
 
 func TestAct_ForwardsTrustedInputFields(t *testing.T) {
@@ -681,48 +780,35 @@ func TestCommitSession_DoesNotCommitWhenCheckpointFails(t *testing.T) {
 	}
 }
 
+func TestCommitSession_DeletesRuntimeSessionAfterSuccessfulCommit(t *testing.T) {
+	manager := &fakeSessionManager{commitOut: session.CommitOutput{NewVersion: "v2"}}
+	browserRuntime := &fakeBrowserRuntime{}
+	handler := controller.NewSessionController(manager, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/commit", bytes.NewReader([]byte(`{"ifMatchVersion":"v1"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CommitSession(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.deleteCalls) != 1 || manager.deleteCalls[0] != "rt_1" {
+		t.Fatalf("expected runtime session delete after commit, got %+v", manager.deleteCalls)
+	}
+}
+
 func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
-	manager := session.NewManager(session.ManagerOptions{
-		Store:      profile.NewMemoryStore(),
-		Workdir:    t.TempDir(),
-		CDPBaseURL: "ws://browserd:9222/devtools/browser",
-	})
+	manager := &fakeSessionManager{commitErr: session.ErrProfileVersionConflict}
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
-	create := []byte(`{
-		"profilePath":"/browser-sessions/t_1/c_1/bs_1/profile.tgz",
-		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
-	}`)
-	creq := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader(create))
-	creq.Header.Set("Content-Type", "application/json")
-	crr := httptest.NewRecorder()
-	handler.CreateSession(crr, creq)
-	if crr.Code != http.StatusOK {
-		t.Fatalf("create expected 200, got %d body=%s", crr.Code, crr.Body.String())
-	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/commit", bytes.NewReader([]byte(`{"ifMatchVersion":"stale"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CommitSession(rr, req, "rt_1")
 
-	var cbody map[string]any
-	_ = json.Unmarshal(crr.Body.Bytes(), &cbody)
-	rid := cbody["data"].(map[string]any)["runtimeSessionId"].(string)
-
-	// first commit with matching version succeeds and moves version forward
-	commit1 := []byte(`{"ifMatchVersion":"new"}`)
-	req1 := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/commit", bytes.NewReader(commit1))
-	req1.Header.Set("Content-Type", "application/json")
-	rr1 := httptest.NewRecorder()
-	handler.CommitSession(rr1, req1, rid)
-	if rr1.Code != http.StatusOK {
-		t.Fatalf("first commit expected 200, got %d body=%s", rr1.Code, rr1.Body.String())
-	}
-
-	// stale ifMatchVersion should conflict
-	commit2 := []byte(`{"ifMatchVersion":"new"}`)
-	req2 := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/commit", bytes.NewReader(commit2))
-	req2.Header.Set("Content-Type", "application/json")
-	rr2 := httptest.NewRecorder()
-	handler.CommitSession(rr2, req2, rid)
-	if rr2.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d body=%s", rr2.Code, rr2.Body.String())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -911,15 +997,6 @@ func TestServePointerEventsRequiresValidLiveToken(t *testing.T) {
 
 func TestServePointerEventsStreamsSanitizedSnapshots(t *testing.T) {
 	store := live.NewTokenStore(live.TokenStoreOptions{})
-	token, _, err := store.Issue(live.IssueRequest{
-		RuntimeSessionID: "rt_1",
-		HandoffID:        "lv_1",
-		Permission:       live.PermissionView,
-		TTL:              time.Minute,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	browserRuntime := &fakeBrowserRuntime{
 		pointerSub: browser.PointerSubscription{
 			C: closedPointerChannel(browser.VirtualPointerSnapshot{
@@ -939,6 +1016,16 @@ func TestServePointerEventsStreamsSanitizedSnapshots(t *testing.T) {
 		LiveBaseURL: "https://browser.example",
 		TokenStore:  store,
 	})
+	rid := createTestSession(t, handler)
+	token, _, err := store.Issue(live.IssueRequest{
+		RuntimeSessionID: rid,
+		HandoffID:        "lv_1",
+		Permission:       live.PermissionView,
+		TTL:              time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v/"+token+"/pointer-events", nil)
 
@@ -951,11 +1038,11 @@ func TestServePointerEventsStreamsSanitizedSnapshots(t *testing.T) {
 	if !strings.Contains(body, "event: pointer") || !strings.Contains(body, `"visible":true`) {
 		t.Fatalf("expected pointer SSE body, got %s", body)
 	}
-	if strings.Contains(body, "rt_1") {
+	if strings.Contains(body, rid) {
 		t.Fatalf("pointer stream must not expose runtime session id: %s", body)
 	}
-	if len(browserRuntime.pointerCalls) != 1 || browserRuntime.pointerCalls[0] != "rt_1" {
-		t.Fatalf("expected pointer subscription for rt_1, got %+v", browserRuntime.pointerCalls)
+	if len(browserRuntime.pointerCalls) != 1 || browserRuntime.pointerCalls[0] != rid {
+		t.Fatalf("expected pointer subscription for %s, got %+v", rid, browserRuntime.pointerCalls)
 	}
 }
 

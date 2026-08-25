@@ -54,6 +54,8 @@ type SessionInfo struct {
 	ProfileDir       string
 	Version          string
 	LeaseID          string
+	TTLSeconds       int
+	LastActiveAt     time.Time
 	ExpiresAt        time.Time
 	Fingerprint      fingerprint.Config
 	ProxyServer      string
@@ -65,9 +67,12 @@ type runtimeSession struct {
 	ProfileDir       string
 	Version          string
 	LeaseID          string
+	TTLSeconds       int
+	LastActiveAt     time.Time
 	ExpiresAt        time.Time
 	Fingerprint      fingerprint.Config
 	ProxyServer      string
+	Closing          bool
 }
 
 type Manager interface {
@@ -75,12 +80,15 @@ type Manager interface {
 	Commit(runtimeSessionID string, input CommitInput) (CommitOutput, error)
 	Delete(runtimeSessionID string) error
 	Get(runtimeSessionID string) (SessionInfo, error)
+	Touch(runtimeSessionID string) error
+	ClaimExpired(now time.Time) []SessionInfo
 }
 
 type ManagerOptions struct {
 	Store      profile.Store
 	Workdir    string
 	CDPBaseURL string
+	Now        func() time.Time
 }
 
 type manager struct {
@@ -89,6 +97,7 @@ type manager struct {
 	workdir    string
 	cdpBaseURL string
 	sessions   map[string]runtimeSession
+	now        func() time.Time
 }
 
 func NewManager(opts ManagerOptions) Manager {
@@ -104,11 +113,16 @@ func NewManager(opts ManagerOptions) Manager {
 	if st == nil {
 		st = profile.NewMemoryStore()
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &manager{
 		store:      st,
 		workdir:    workdir,
 		cdpBaseURL: cdpBase,
 		sessions:   map[string]runtimeSession{},
+		now:        now,
 	}
 }
 
@@ -122,15 +136,12 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		return CreateOutput{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
-	ttl := input.TTLSeconds
-	if ttl <= 0 {
-		ttl = 900
-	}
+	ttl := normalizeTTLSeconds(input.TTLSeconds)
 	leaseID := strings.TrimSpace(input.LeaseID)
 	if leaseID == "" {
-		leaseID = fmt.Sprintf("lease_%d", time.Now().UnixNano())
+		leaseID = fmt.Sprintf("lease_%d", m.now().UnixNano())
 	}
-	rid := fmt.Sprintf("rt_%d_%d", time.Now().UnixNano(), rand.Intn(1000))
+	rid := fmt.Sprintf("rt_%d_%d", m.now().UnixNano(), rand.Intn(1000))
 	sessionRoot := filepath.Join(m.workdir, "sessions", rid)
 	profileDir := filepath.Join(sessionRoot, "profile")
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
@@ -166,6 +177,7 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		ResolvedVersion:  resolvedVersion,
 	}
 
+	now := m.now().UTC()
 	m.mu.Lock()
 	m.sessions[rid] = runtimeSession{
 		RuntimeSessionID: rid,
@@ -173,7 +185,9 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		ProfileDir:       profileDir,
 		Version:          resolvedVersion,
 		LeaseID:          leaseID,
-		ExpiresAt:        time.Now().UTC().Add(time.Duration(ttl) * time.Second),
+		TTLSeconds:       ttl,
+		LastActiveAt:     now,
+		ExpiresAt:        now.Add(time.Duration(ttl) * time.Second),
 		Fingerprint:      fp,
 		ProxyServer:      strings.TrimSpace(input.ProxyServer),
 	}
@@ -189,7 +203,7 @@ func (m *manager) Commit(runtimeSessionID string, input CommitInput) (CommitOutp
 	m.mu.Lock()
 	s, ok := m.sessions[runtimeSessionID]
 	m.mu.Unlock()
-	if !ok {
+	if !ok || s.Closing {
 		return CommitOutput{}, ErrSessionNotFound
 	}
 
@@ -212,8 +226,10 @@ func (m *manager) Commit(runtimeSessionID string, input CommitInput) (CommitOutp
 	}
 
 	m.mu.Lock()
-	s.Version = newVersion
-	m.sessions[runtimeSessionID] = s
+	if current, ok := m.sessions[runtimeSessionID]; ok && !current.Closing {
+		current.Version = newVersion
+		m.sessions[runtimeSessionID] = current
+	}
 	m.mu.Unlock()
 
 	return CommitOutput{
@@ -280,17 +296,66 @@ func (m *manager) Get(runtimeSessionID string) (SessionInfo, error) {
 	defer m.mu.Unlock()
 
 	s, ok := m.sessions[runtimeSessionID]
-	if !ok {
+	if !ok || s.Closing {
 		return SessionInfo{}, ErrSessionNotFound
 	}
+	return sessionInfoFromRuntime(s), nil
+}
+
+func (m *manager) Touch(runtimeSessionID string) error {
+	if strings.TrimSpace(runtimeSessionID) == "" {
+		return ErrInvalidRequest
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[runtimeSessionID]
+	if !ok || s.Closing {
+		return ErrSessionNotFound
+	}
+	now := m.now().UTC()
+	s.LastActiveAt = now
+	s.ExpiresAt = now.Add(time.Duration(s.TTLSeconds) * time.Second)
+	m.sessions[runtimeSessionID] = s
+	return nil
+}
+
+func (m *manager) ClaimExpired(now time.Time) []SessionInfo {
+	now = now.UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	expired := []SessionInfo{}
+	for id, s := range m.sessions {
+		if s.Closing || now.Before(s.ExpiresAt) {
+			continue
+		}
+		s.Closing = true
+		m.sessions[id] = s
+		expired = append(expired, sessionInfoFromRuntime(s))
+	}
+	return expired
+}
+
+func normalizeTTLSeconds(ttl int) int {
+	if ttl <= 0 {
+		return 900
+	}
+	return ttl
+}
+
+func sessionInfoFromRuntime(s runtimeSession) SessionInfo {
 	return SessionInfo{
 		RuntimeSessionID: s.RuntimeSessionID,
 		ProfilePath:      s.ProfilePath,
 		ProfileDir:       s.ProfileDir,
 		Version:          s.Version,
 		LeaseID:          s.LeaseID,
+		TTLSeconds:       s.TTLSeconds,
+		LastActiveAt:     s.LastActiveAt,
 		ExpiresAt:        s.ExpiresAt,
 		Fingerprint:      s.Fingerprint,
 		ProxyServer:      s.ProxyServer,
-	}, nil
+	}
 }

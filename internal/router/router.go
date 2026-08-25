@@ -1,9 +1,11 @@
 package router
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"browserd/internal/assets"
 	"browserd/internal/browser"
@@ -82,6 +84,7 @@ func New(cfg config.Config) http.Handler {
 		LiveTokenTTL:  cfg.LiveTokenTTL,
 		TokenStore:    live.NewTokenStore(live.TokenStoreOptions{}),
 	})
+	handler.StartExpiredSessionReaper(context.Background(), time.Minute)
 	noVNCBasePath := strings.TrimRight(strings.TrimSpace(cfg.NoVNCBasePath), "/")
 	if noVNCBasePath == "" {
 		noVNCBasePath = "/v"

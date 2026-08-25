@@ -62,6 +62,17 @@ func (f fakeUploadSessionManager) Get(string) (session.SessionInfo, error) {
 	return f.info, nil
 }
 
+func (f fakeUploadSessionManager) Touch(string) error {
+	if f.err != nil {
+		return f.err
+	}
+	return nil
+}
+
+func (f fakeUploadSessionManager) ClaimExpired(time.Time) []session.SessionInfo {
+	return nil
+}
+
 func TestNewService_AcceptsProxyHopOptions(t *testing.T) {
 	svc := NewServiceWithOptions(ServiceOptions{
 		Sessions: session.NewManager(session.ManagerOptions{
