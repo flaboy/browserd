@@ -3,7 +3,6 @@ package profile
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,7 @@ func TestFileStorePutGetRoundTrip(t *testing.T) {
 	path := "/browser-sessions/dev/douyin/local/profile.tgz"
 	body := []byte("profile archive")
 
-	version, err := store.Put(context.Background(), path, body, "new")
+	version, err := store.Put(context.Background(), path, body)
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -47,7 +46,7 @@ func TestFileStoreRejectsFileURI(t *testing.T) {
 		t.Fatalf("new file store: %v", err)
 	}
 	path := "file:///browser-sessions/dev/xhs/local/profile.tgz"
-	if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err == nil {
+	if _, err := store.Put(context.Background(), path, []byte("x")); err == nil {
 		t.Fatalf("expected file uri to fail")
 	}
 }
@@ -62,7 +61,7 @@ func TestFileStoreRejectsPathTraversal(t *testing.T) {
 		"/../outside/profile.tgz",
 		"/browser-sessions/dev/../outside/profile.tgz",
 	} {
-		if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err == nil {
+		if _, err := store.Put(context.Background(), path, []byte("x")); err == nil {
 			t.Fatalf("expected traversal path to fail: %s", path)
 		}
 	}
@@ -78,18 +77,24 @@ func TestFileStoreRejectsSchemeURI(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsStaleIfMatchVersion(t *testing.T) {
+func TestFileStoreOverwritesWithoutIfMatchVersion(t *testing.T) {
 	store, err := NewFileStore(FileStoreConfig{Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("new file store: %v", err)
 	}
 	path := "/browser-sessions/dev/douyin/local/profile.tgz"
-	if _, err := store.Put(context.Background(), path, []byte("v1"), "new"); err != nil {
+	if _, err := store.Put(context.Background(), path, []byte("v1")); err != nil {
 		t.Fatalf("put initial: %v", err)
 	}
-	_, err = store.Put(context.Background(), path, []byte("v2"), "stale")
-	if !errors.Is(err, ErrVersionConflict) {
-		t.Fatalf("expected ErrVersionConflict, got %v", err)
+	if _, err := store.Put(context.Background(), path, []byte("v2")); err != nil {
+		t.Fatalf("put overwrite: %v", err)
+	}
+	got, _, found, err := store.Get(context.Background(), path)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !found || string(got) != "v2" {
+		t.Fatalf("expected overwritten profile, found=%v body=%q", found, string(got))
 	}
 }
 
@@ -100,7 +105,7 @@ func TestFileStorePersistsOnDisk(t *testing.T) {
 		t.Fatalf("new file store: %v", err)
 	}
 	path := "/browser-sessions/dev/douyin/local/profile.tgz"
-	if _, err := store.Put(context.Background(), path, []byte("x"), "new"); err != nil {
+	if _, err := store.Put(context.Background(), path, []byte("x")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "browser-sessions", "dev", "douyin", "local", "profile.tgz")); err != nil {

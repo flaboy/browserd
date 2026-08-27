@@ -91,33 +91,10 @@ func (s *S3Store) Get(ctx context.Context, path string) (data []byte, version st
 	return body, trimETag(head.ETag), true, nil
 }
 
-func (s *S3Store) Put(ctx context.Context, path string, data []byte, ifMatchVersion string) (newVersion string, err error) {
-	if strings.TrimSpace(ifMatchVersion) == "" {
-		return "", ErrIfMatchRequired
-	}
+func (s *S3Store) Put(ctx context.Context, path string, data []byte) (newVersion string, err error) {
 	key, err := parseS3ProfilePath(path)
 	if err != nil {
 		return "", err
-	}
-	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	})
-	found := true
-	if err != nil {
-		if isS3NotFound(err) {
-			found = false
-		} else {
-			return "", err
-		}
-	}
-	if found {
-		current := trimETag(head.ETag)
-		if current != strings.TrimSpace(ifMatchVersion) {
-			return "", ErrVersionConflict
-		}
-	} else if strings.TrimSpace(ifMatchVersion) != "new" {
-		return "", ErrVersionConflict
 	}
 
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{

@@ -118,7 +118,46 @@ func TestManager_CreateAcceptsLogicalProfilePath(t *testing.T) {
 	}
 }
 
-func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
+func TestManager_CreateIgnoresExpectedVersionAndUsesStoredProfile(t *testing.T) {
+	tmp := t.TempDir()
+	store := profile.NewMemoryStore()
+	profilePath := "/browser-sessions/t2/c2/s2/profile.tgz"
+	seedDir := filepath.Join(tmp, "seed2")
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatalf("mkdir seed2: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(seedDir, "x.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write seed2 file: %v", err)
+	}
+	seedTGZ := filepath.Join(tmp, "seed2.tgz")
+	if err := profile.PackDirToTGZ(seedDir, seedTGZ); err != nil {
+		t.Fatalf("pack seed2 tgz: %v", err)
+	}
+	seedData, err := os.ReadFile(seedTGZ)
+	if err != nil {
+		t.Fatalf("read seed2 tgz: %v", err)
+	}
+	store.Seed(profilePath, seedData, "v10")
+
+	mgr := NewManager(ManagerOptions{
+		Store:      store,
+		Workdir:    filepath.Join(tmp, "work"),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	out, err := mgr.Create(CreateInput{
+		ProfilePath:     profilePath,
+		ExpectedVersion: "old",
+		Fingerprint:     testFingerprintConfig(),
+	})
+	if err != nil {
+		t.Fatalf("create must ignore stale expectedVersion: %v", err)
+	}
+	if out.ResolvedVersion != "v10" {
+		t.Fatalf("resolvedVersion mismatch: got %q want %q", out.ResolvedVersion, "v10")
+	}
+}
+
+func TestManager_CommitOverwritesProfileWithoutIfMatchVersion(t *testing.T) {
 	tmp := t.TempDir()
 	store := profile.NewMemoryStore()
 	profilePath := "/browser-sessions/t2/c2/s2/profile.tgz"
@@ -152,12 +191,12 @@ func TestManager_CommitRejectsStaleIfMatchVersion(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	_, err = mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "old"})
-	if err == nil {
-		t.Fatalf("expected version conflict")
+	commitOut, err := mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "old"})
+	if err != nil {
+		t.Fatalf("commit must ignore stale ifMatchVersion: %v", err)
 	}
-	if err != ErrProfileVersionConflict {
-		t.Fatalf("expected ErrProfileVersionConflict, got %v", err)
+	if commitOut.NewVersion == "" {
+		t.Fatalf("expected newVersion")
 	}
 }
 
@@ -340,12 +379,18 @@ func TestManager_ClaimExpiredPreventsReuseUntilDelete(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_PutRequiresIfMatch(t *testing.T) {
+func TestMemoryStore_PutOverwritesWithoutIfMatch(t *testing.T) {
 	store := profile.NewMemoryStore()
 	path := "/browser-sessions/t/c/s/profile.tgz"
 	store.Seed(path, []byte("x"), "v1")
-	_, err := store.Put(context.Background(), path, []byte("y"), "stale")
-	if err == nil {
-		t.Fatalf("expected conflict")
+	if _, err := store.Put(context.Background(), path, []byte("y")); err != nil {
+		t.Fatalf("put must overwrite without if-match: %v", err)
+	}
+	got, _, found, err := store.Get(context.Background(), path)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !found || string(got) != "y" {
+		t.Fatalf("expected overwritten profile, found=%v body=%q", found, string(got))
 	}
 }

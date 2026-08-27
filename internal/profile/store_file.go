@@ -49,25 +49,10 @@ func (s *FileStore) Get(_ context.Context, uri string) ([]byte, string, bool, er
 	return body, fileStoreVersion(body), true, nil
 }
 
-func (s *FileStore) Put(_ context.Context, uri string, data []byte, ifMatchVersion string) (string, error) {
-	if strings.TrimSpace(ifMatchVersion) == "" {
-		return "", ErrIfMatchRequired
-	}
+func (s *FileStore) Put(_ context.Context, uri string, data []byte) (string, error) {
 	target, err := s.resolve(uri)
 	if err != nil {
 		return "", err
-	}
-
-	current, err := os.ReadFile(target)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	if err == nil {
-		if fileStoreVersion(current) != strings.TrimSpace(ifMatchVersion) {
-			return "", ErrVersionConflict
-		}
-	} else if strings.TrimSpace(ifMatchVersion) != "new" {
-		return "", ErrVersionConflict
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {

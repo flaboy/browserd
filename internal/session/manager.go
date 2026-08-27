@@ -17,9 +17,8 @@ import (
 )
 
 var (
-	ErrInvalidRequest         = errors.New("invalid request")
-	ErrSessionNotFound        = errors.New("session not found")
-	ErrProfileVersionConflict = errors.New("profile version conflict")
+	ErrInvalidRequest  = errors.New("invalid request")
+	ErrSessionNotFound = errors.New("session not found")
 )
 
 type CreateInput struct {
@@ -166,10 +165,6 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 		}
 	}
 
-	if ev := strings.TrimSpace(input.ExpectedVersion); ev != "" && ev != resolvedVersion {
-		return CreateOutput{}, ErrProfileVersionConflict
-	}
-
 	out := CreateOutput{
 		RuntimeSessionID: rid,
 		CDPWsURL:         m.cdpBaseURL + "/" + rid,
@@ -196,7 +191,8 @@ func (m *manager) Create(input CreateInput) (CreateOutput, error) {
 }
 
 func (m *manager) Commit(runtimeSessionID string, input CommitInput) (CommitOutput, error) {
-	if strings.TrimSpace(runtimeSessionID) == "" || strings.TrimSpace(input.IfMatchVersion) == "" {
+	_ = input
+	if strings.TrimSpace(runtimeSessionID) == "" {
 		return CommitOutput{}, ErrInvalidRequest
 	}
 
@@ -217,11 +213,8 @@ func (m *manager) Commit(runtimeSessionID string, input CommitInput) (CommitOutp
 		return CommitOutput{}, err
 	}
 
-	newVersion, err := m.store.Put(context.Background(), s.ProfilePath, buf, input.IfMatchVersion)
+	newVersion, err := m.store.Put(context.Background(), s.ProfilePath, buf)
 	if err != nil {
-		if errors.Is(err, profile.ErrVersionConflict) {
-			return CommitOutput{}, ErrProfileVersionConflict
-		}
 		return CommitOutput{}, err
 	}
 

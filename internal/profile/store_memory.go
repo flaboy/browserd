@@ -51,23 +51,9 @@ func (s *MemoryStore) Get(_ context.Context, path string) ([]byte, string, bool,
 	return cp, obj.version, true, nil
 }
 
-func (s *MemoryStore) Put(_ context.Context, path string, data []byte, ifMatchVersion string) (string, error) {
-	if ifMatchVersion == "" {
-		return "", ErrIfMatchRequired
-	}
+func (s *MemoryStore) Put(_ context.Context, path string, data []byte) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	obj, ok := s.objects[path]
-	if ok {
-		if obj.version != ifMatchVersion {
-			return "", ErrVersionConflict
-		}
-	} else {
-		if ifMatchVersion != "new" {
-			return "", ErrVersionConflict
-		}
-	}
 
 	newVersion := fmt.Sprintf("v%d", s.seq)
 	s.seq++
