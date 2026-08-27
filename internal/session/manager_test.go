@@ -73,7 +73,7 @@ func TestManager_CreateAndCommit_UsesSingleProfileTGZKey(t *testing.T) {
 		t.Fatalf("resolvedVersion mismatch: %s", out.ResolvedVersion)
 	}
 
-	commitOut, err := mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "v1"})
+	commitOut, err := mgr.Commit(out.RuntimeSessionID, CommitInput{})
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestManager_CreateAcceptsLogicalProfilePath(t *testing.T) {
 		t.Fatalf("profile path mismatch: %s", info.ProfilePath)
 	}
 
-	if _, err := mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "new"}); err != nil {
+	if _, err := mgr.Commit(out.RuntimeSessionID, CommitInput{}); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 	if store.LastPutPath() != profilePath {
@@ -145,12 +145,11 @@ func TestManager_CreateIgnoresExpectedVersionAndUsesStoredProfile(t *testing.T) 
 		CDPBaseURL: "ws://browserd:9222/devtools/browser",
 	})
 	out, err := mgr.Create(CreateInput{
-		ProfilePath:     profilePath,
-		ExpectedVersion: "old",
-		Fingerprint:     testFingerprintConfig(),
+		ProfilePath: profilePath,
+		Fingerprint: testFingerprintConfig(),
 	})
 	if err != nil {
-		t.Fatalf("create must ignore stale expectedVersion: %v", err)
+		t.Fatalf("create must use stored profile without a version guard: %v", err)
 	}
 	if out.ResolvedVersion != "v10" {
 		t.Fatalf("resolvedVersion mismatch: got %q want %q", out.ResolvedVersion, "v10")
@@ -191,9 +190,9 @@ func TestManager_CommitOverwritesProfileWithoutIfMatchVersion(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	commitOut, err := mgr.Commit(out.RuntimeSessionID, CommitInput{IfMatchVersion: "old"})
+	commitOut, err := mgr.Commit(out.RuntimeSessionID, CommitInput{})
 	if err != nil {
-		t.Fatalf("commit must ignore stale ifMatchVersion: %v", err)
+		t.Fatalf("commit must overwrite profile without a version guard: %v", err)
 	}
 	if commitOut.NewVersion == "" {
 		t.Fatalf("expected newVersion")

@@ -518,9 +518,6 @@ func TestCreateSession_AcceptsLogicalProfilePath(t *testing.T) {
 	if manager.createCalls[0].ProfilePath != "/browser-sessions/dev/douyin/local/profile.tgz" {
 		t.Fatalf("profile path was not forwarded: %+v", manager.createCalls[0])
 	}
-	if manager.createCalls[0].ExpectedVersion != "" {
-		t.Fatalf("expectedVersion must not be forwarded: %+v", manager.createCalls[0])
-	}
 }
 
 func TestCreateSession_PreparesBrowserBeforeReturning(t *testing.T) {
@@ -816,9 +813,6 @@ func TestCommitSession_IgnoresIfMatchVersionField(t *testing.T) {
 	}
 	if len(manager.commitCalls) != 1 {
 		t.Fatalf("expected one commit call, got %+v", manager.commitCalls)
-	}
-	if manager.commitCalls[0].IfMatchVersion != "" {
-		t.Fatalf("ifMatchVersion must not be forwarded: %+v", manager.commitCalls[0])
 	}
 }
 

@@ -22,12 +22,11 @@ var (
 )
 
 type CreateInput struct {
-	ProfilePath     string
-	ExpectedVersion string
-	LeaseID         string
-	TTLSeconds      int
-	Fingerprint     fingerprint.Config
-	ProxyServer     string
+	ProfilePath string
+	LeaseID     string
+	TTLSeconds  int
+	Fingerprint fingerprint.Config
+	ProxyServer string
 }
 
 type CreateOutput struct {
@@ -37,9 +36,7 @@ type CreateOutput struct {
 	ResolvedVersion  string `json:"resolvedVersion,omitempty"`
 }
 
-type CommitInput struct {
-	IfMatchVersion string `json:"ifMatchVersion"`
-}
+type CommitInput struct{}
 
 type CommitOutput struct {
 	NewVersion string `json:"newVersion"`
