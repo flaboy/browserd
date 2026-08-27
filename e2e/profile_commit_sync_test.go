@@ -89,7 +89,7 @@ func TestProfileCommitSyncSafety(t *testing.T) {
 func runProfileSyncRound(t *testing.T, baseURL string, workdir string, pageURL string, mode string, round int) bool {
 	t.Helper()
 	profilePath := fmt.Sprintf("/browser-sessions/sync-test/%s/round-%02d/profile.tgz", mode, round)
-	session := syncCreateSession(t, baseURL, profilePath, "")
+	session := syncCreateSession(t, baseURL, profilePath)
 	runtimeID := session.RuntimeSessionID
 	defer syncDeleteSession(baseURL, runtimeID)
 
@@ -117,14 +117,12 @@ func runProfileSyncRound(t *testing.T, baseURL string, workdir string, pageURL s
 		syncWaitDevToolsDown(t, wsURL, 10*time.Second)
 	}
 
-	commit := syncPost[syncCommitResult](t, baseURL, "/v1/sessions/"+runtimeID+"/commit", map[string]any{
-		"ifMatchVersion": firstNonEmpty(session.ResolvedVersion, "new"),
-	})
+	commit := syncPost[syncCommitResult](t, baseURL, "/v1/sessions/"+runtimeID+"/commit", map[string]any{})
 	if strings.TrimSpace(commit.NewVersion) == "" {
 		t.Fatalf("%s round %d commit returned empty version", mode, round)
 	}
 
-	restored := syncCreateSession(t, baseURL, profilePath, commit.NewVersion)
+	restored := syncCreateSession(t, baseURL, profilePath)
 	defer syncDeleteSession(baseURL, restored.RuntimeSessionID)
 	syncPost[syncEvalResult](t, baseURL, "/v1/sessions/"+restored.RuntimeSessionID+"/navigate", map[string]any{
 		"url":       pageURL,
@@ -138,12 +136,11 @@ func runProfileSyncRound(t *testing.T, baseURL string, workdir string, pageURL s
 	return cookieOK && localOK
 }
 
-func syncCreateSession(t *testing.T, baseURL string, profilePath string, expectedVersion string) syncSession {
+func syncCreateSession(t *testing.T, baseURL string, profilePath string) syncSession {
 	t.Helper()
 	body := map[string]any{
-		"profilePath":     profilePath,
-		"expectedVersion": expectedVersion,
-		"ttlSec":          300,
+		"profilePath": profilePath,
+		"ttlSec":      300,
 		"fingerprint": map[string]any{
 			"seed":                "sync-safe-test",
 			"locale":              "zh-CN",

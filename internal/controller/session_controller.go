@@ -117,16 +117,14 @@ func NewSessionControllerWithLive(opts SessionControllerOptions) *SessionControl
 }
 
 type createSessionRequest struct {
-	ProfilePath     string             `json:"profilePath,omitempty"`
-	ExpectedVersion string             `json:"expectedVersion,omitempty"`
-	TTLSeconds      int                `json:"ttlSec,omitempty"`
-	LeaseID         string             `json:"leaseId,omitempty"`
-	Fingerprint     fingerprint.Config `json:"fingerprint"`
-	ProxyServer     string             `json:"proxyServer,omitempty"`
+	ProfilePath string             `json:"profilePath,omitempty"`
+	TTLSeconds  int                `json:"ttlSec,omitempty"`
+	LeaseID     string             `json:"leaseId,omitempty"`
+	Fingerprint fingerprint.Config `json:"fingerprint"`
+	ProxyServer string             `json:"proxyServer,omitempty"`
 }
 
 type commitSessionRequest struct {
-	IfMatchVersion string `json:"ifMatchVersion"`
 }
 
 type navigateRequest struct {
@@ -229,12 +227,11 @@ func (h *SessionController) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	out, err := h.manager.Create(session.CreateInput{
-		ProfilePath:     req.ProfilePath,
-		ExpectedVersion: req.ExpectedVersion,
-		TTLSeconds:      req.TTLSeconds,
-		LeaseID:         req.LeaseID,
-		Fingerprint:     fp,
-		ProxyServer:     req.ProxyServer,
+		ProfilePath: req.ProfilePath,
+		TTLSeconds:  req.TTLSeconds,
+		LeaseID:     req.LeaseID,
+		Fingerprint: fp,
+		ProxyServer: req.ProxyServer,
 	})
 	if err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
@@ -293,16 +290,11 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 		}
 	}
 	h.revokeRuntimeSession(runtimeSessionID)
-	out, err := h.manager.Commit(runtimeSessionID, session.CommitInput{
-		IfMatchVersion: req.IfMatchVersion,
-	})
+	out, err := h.manager.Commit(runtimeSessionID, session.CommitInput{})
 	if err != nil {
 		switch err {
 		case session.ErrSessionNotFound:
 			types.WriteErr(w, http.StatusNotFound, "SESSION_NOT_FOUND", err.Error())
-			return
-		case session.ErrProfileVersionConflict:
-			types.WriteErr(w, http.StatusConflict, "PROFILE_VERSION_CONFLICT", err.Error())
 			return
 		default:
 			types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())

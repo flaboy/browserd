@@ -502,6 +502,7 @@ func TestCreateSession_AcceptsLogicalProfilePath(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions", bytes.NewReader([]byte(`{
 		"profilePath":"/browser-sessions/dev/douyin/local/profile.tgz",
+		"expectedVersion":"stale-version-must-be-ignored",
 		"fingerprint":{"seed":"fp_seed_1","locale":"en-US","languages":["en-US","en"],"acceptLanguage":"en-US,en;q=0.9","timezone":"America/New_York","platform":"Win32","os":"Windows","userAgent":"Mozilla/5.0 test","viewportWidth":1366,"viewportHeight":768,"screenWidth":1366,"screenHeight":768,"deviceScaleFactor":1,"hardwareConcurrency":8,"deviceMemory":8,"webglVendor":"Google Inc.","webglRenderer":"ANGLE Test"}
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -516,6 +517,9 @@ func TestCreateSession_AcceptsLogicalProfilePath(t *testing.T) {
 	}
 	if manager.createCalls[0].ProfilePath != "/browser-sessions/dev/douyin/local/profile.tgz" {
 		t.Fatalf("profile path was not forwarded: %+v", manager.createCalls[0])
+	}
+	if manager.createCalls[0].ExpectedVersion != "" {
+		t.Fatalf("expectedVersion must not be forwarded: %+v", manager.createCalls[0])
 	}
 }
 
@@ -722,7 +726,7 @@ func TestCreateSession_ForwardsFingerprintAndProxyServer(t *testing.T) {
 	}
 }
 
-func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
+func TestCommitSession_DoesNotRequireIfMatchVersion(t *testing.T) {
 	manager := session.NewManager(session.ManagerOptions{
 		Store:      profile.NewMemoryStore(),
 		Workdir:    t.TempDir(),
@@ -751,8 +755,8 @@ func TestCommitSession_ValidatesIfMatchVersion(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	handler.CommitSession(rr, req, rid)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -798,8 +802,8 @@ func TestCommitSession_DeletesRuntimeSessionAfterSuccessfulCommit(t *testing.T) 
 	}
 }
 
-func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
-	manager := &fakeSessionManager{commitErr: session.ErrProfileVersionConflict}
+func TestCommitSession_IgnoresIfMatchVersionField(t *testing.T) {
+	manager := &fakeSessionManager{commitOut: session.CommitOutput{NewVersion: "v2"}}
 	handler := controller.NewSessionController(manager, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/commit", bytes.NewReader([]byte(`{"ifMatchVersion":"stale"}`)))
@@ -807,8 +811,14 @@ func TestCommitSession_Returns409OnVersionConflict(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.CommitSession(rr, req, "rt_1")
 
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(manager.commitCalls) != 1 {
+		t.Fatalf("expected one commit call, got %+v", manager.commitCalls)
+	}
+	if manager.commitCalls[0].IfMatchVersion != "" {
+		t.Fatalf("ifMatchVersion must not be forwarded: %+v", manager.commitCalls[0])
 	}
 }
 

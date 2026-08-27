@@ -127,9 +127,7 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	}
 
 	commitURL := base + "/v1/sessions/" + runtimeSessionID + "/commit"
-	status, commitEnv := mustDoJSON(t, http.MethodPost, commitURL, map[string]any{
-		"ifMatchVersion": "new",
-	})
+	status, commitEnv := mustDoJSON(t, http.MethodPost, commitURL, map[string]any{})
 	if status != http.StatusOK {
 		t.Fatalf("first commit status=%d err=%v", status, commitEnv.Error)
 	}
@@ -139,9 +137,8 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 	}
 
 	status, create2Env := mustDoJSON(t, http.MethodPost, createURL, map[string]any{
-		"profilePath":     profilePath,
-		"fingerprint":     smokeFingerprint(),
-		"expectedVersion": newVersion,
+		"profilePath": profilePath,
+		"fingerprint": smokeFingerprint(),
 	})
 	if status != http.StatusOK {
 		t.Fatalf("create2 status=%d err=%v", status, create2Env.Error)
@@ -156,10 +153,8 @@ func TestBrowserdMinIOSmoke(t *testing.T) {
 		t.Fatalf("navigate after create2 status=%d err=%v", status, navEnv.Error)
 	}
 
-	status, conflictEnv := mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID2+"/commit", map[string]any{
-		"ifMatchVersion": "new",
-	})
-	if status != http.StatusConflict {
-		t.Fatalf("expected 409 conflict, got status=%d err=%v", status, conflictEnv.Error)
+	status, commit2Env := mustDoJSON(t, http.MethodPost, base+"/v1/sessions/"+runtimeSessionID2+"/commit", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("second commit status=%d err=%v", status, commit2Env.Error)
 	}
 }
