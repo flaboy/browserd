@@ -218,10 +218,13 @@ Content-Type: application/json
 
 {
   "ref": "t1",
-  "format": "png"
+  "format": "png",
+  "screenshotS3Prefix": "/browser-screenshots/2026-08/team_1/conv_1/"
 }
 ```
 
 约束：
 - 不带 `ref` 时返回全页截图
 - 带 `ref` 时可对 `e*` 与 `t*` 截图
+- `screenshotS3Prefix` 必填，且只能是以 `/` 开头、以 `/` 结尾的逻辑路径；不得传 `s3://`、`file://`、`http://` 等协议型路径
+- browserd 使用 `BROWSERD_PROFILE_BUCKET` 指定的 bucket 上传截图，返回 `screenshotId` 为 `<uuid>.png`，返回 `s3Path` 为逻辑路径

@@ -660,11 +660,11 @@ func TestUploadAfterNavigate_ReturnsCaptureError(t *testing.T) {
 
 func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 	store := &fakeAssetStore{}
-	svc := &Service{assets: store}
+	svc := &Service{assets: store, assetBucket: "private"}
 
 	out, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
 		Format:             "png",
-		ScreenshotS3Prefix: "s3://private/browser-screenshots/2026-08/team_1/conv_1/",
+		ScreenshotS3Prefix: "/browser-screenshots/2026-08/team_1/conv_1/",
 	}, []byte("png-bytes"), "png", "image/png")
 	if err != nil {
 		t.Fatalf("persistScreenshot returned error: %v", err)
@@ -672,10 +672,11 @@ func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 	if out.ScreenshotID == "" || !strings.HasSuffix(out.ScreenshotID, ".png") {
 		t.Fatalf("expected png screenshot id, got %+v", out)
 	}
-	wantURI := "s3://private/browser-screenshots/2026-08/team_1/conv_1/" + out.ScreenshotID
-	if out.S3Path != wantURI {
-		t.Fatalf("unexpected s3 path: got %q want %q", out.S3Path, wantURI)
+	wantPath := "/browser-screenshots/2026-08/team_1/conv_1/" + out.ScreenshotID
+	if out.S3Path != wantPath {
+		t.Fatalf("unexpected s3 path: got %q want %q", out.S3Path, wantPath)
 	}
+	wantURI := "s3://private/browser-screenshots/2026-08/team_1/conv_1/" + out.ScreenshotID
 	if len(store.puts) != 1 || store.puts[0].URI != wantURI {
 		t.Fatalf("expected one upload to generated path, got %+v", store.puts)
 	}
@@ -685,10 +686,20 @@ func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 }
 
 func TestPersistScreenshot_RequiresS3Prefix(t *testing.T) {
-	svc := &Service{assets: &fakeAssetStore{}}
+	svc := &Service{assets: &fakeAssetStore{}, assetBucket: "private"}
 	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{}, []byte("png-bytes"), "png", "image/png")
 	if err == nil {
 		t.Fatalf("expected missing screenshotS3Prefix to fail")
+	}
+}
+
+func TestPersistScreenshot_RejectsFullS3Prefix(t *testing.T) {
+	svc := &Service{assets: &fakeAssetStore{}, assetBucket: "private"}
+	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
+		ScreenshotS3Prefix: "s3://private/browser-screenshots/2026-08/team_1/conv_1/",
+	}, []byte("png-bytes"), "png", "image/png")
+	if err == nil {
+		t.Fatalf("expected full s3 screenshot prefix to fail")
 	}
 }
 

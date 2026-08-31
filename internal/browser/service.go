@@ -197,10 +197,11 @@ type WaitForOutput struct {
 }
 
 type Service struct {
-	sessions session.Manager
-	state    *browserrt.State
-	assets   assets.Store
-	proxyHop ProxyHopOptions
+	sessions    session.Manager
+	state       *browserrt.State
+	assets      assets.Store
+	assetBucket string
+	proxyHop    ProxyHopOptions
 
 	capturePNG         func(context.Context) ([]byte, error)
 	setFileInputFiles  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
@@ -232,10 +233,11 @@ type ProxyHopOptions struct {
 }
 
 type ServiceOptions struct {
-	Sessions session.Manager
-	State    *browserrt.State
-	Assets   assets.Store
-	ProxyHop ProxyHopOptions
+	Sessions    session.Manager
+	State       *browserrt.State
+	Assets      assets.Store
+	AssetBucket string
+	ProxyHop    ProxyHopOptions
 }
 
 type activeBrowser struct {
@@ -273,6 +275,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		sessions:           opts.Sessions,
 		state:              state,
 		assets:             opts.Assets,
+		assetBucket:        strings.TrimSpace(opts.AssetBucket),
 		proxyHop:           opts.ProxyHop,
 		capturePNG:         capturePagePNG,
 		browsers:           map[string]*activeBrowser{},
@@ -1749,11 +1752,15 @@ func newScreenshotID(ext string) (string, error) {
 
 func (s *Service) persistScreenshot(ctx context.Context, input ScreenshotInput, body []byte, ext string, contentType string) (ScreenshotOutput, error) {
 	prefix := strings.TrimSpace(input.ScreenshotS3Prefix)
-	if prefix == "" || !strings.HasPrefix(prefix, "s3://") || !strings.HasSuffix(prefix, "/") {
+	if prefix == "" || strings.Contains(prefix, "://") || !strings.HasPrefix(prefix, "/") || !strings.HasSuffix(prefix, "/") {
 		return ScreenshotOutput{}, ErrInvalidRequest
 	}
 	if s.assets == nil {
 		return ScreenshotOutput{}, fmt.Errorf("asset store not configured")
+	}
+	bucket := strings.TrimSpace(s.assetBucket)
+	if bucket == "" {
+		return ScreenshotOutput{}, fmt.Errorf("asset bucket not configured")
 	}
 	if len(body) == 0 {
 		return ScreenshotOutput{}, ErrScreenshotFailed
@@ -1763,7 +1770,8 @@ func (s *Service) persistScreenshot(ctx context.Context, input ScreenshotInput, 
 		return ScreenshotOutput{}, err
 	}
 	s3Path := prefix + screenshotID
-	if err := s.assets.Put(ctx, s3Path, body, contentType); err != nil {
+	uploadURI := "s3://" + bucket + strings.TrimRight(s3Path, "/")
+	if err := s.assets.Put(ctx, uploadURI, body, contentType); err != nil {
 		return ScreenshotOutput{}, err
 	}
 	return ScreenshotOutput{

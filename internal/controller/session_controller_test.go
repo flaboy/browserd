@@ -856,7 +856,7 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 	browserRuntime := &fakeBrowserRuntime{
 		screenshotOut: browser.ScreenshotOutput{
 			ScreenshotID: "123e4567-e89b-12d3-a456-426614174000.png",
-			S3Path:       "s3://private/browser-screenshots/2026-08/team_1/conv_1/123e4567-e89b-12d3-a456-426614174000.png",
+			S3Path:       "/browser-screenshots/2026-08/team_1/conv_1/123e4567-e89b-12d3-a456-426614174000.png",
 			ContentType:  "image/png",
 			ByteLength:   9,
 		},
@@ -866,7 +866,7 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/screenshot", bytes.NewReader([]byte(`{
 		"ref":"e2",
 		"format":"png",
-		"screenshotS3Prefix":"s3://private/browser-screenshots/2026-08/team_1/conv_1/"
+		"screenshotS3Prefix":"/browser-screenshots/2026-08/team_1/conv_1/"
 	}`)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -879,7 +879,7 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 		t.Fatalf("expected one screenshot call, got %+v", browserRuntime.screenshotCalls)
 	}
 	got := browserRuntime.screenshotCalls[0]
-	if got.Ref != "e2" || got.Format != "png" || got.ScreenshotS3Prefix != "s3://private/browser-screenshots/2026-08/team_1/conv_1/" {
+	if got.Ref != "e2" || got.Format != "png" || got.ScreenshotS3Prefix != "/browser-screenshots/2026-08/team_1/conv_1/" {
 		t.Fatalf("unexpected screenshot input: %+v", got)
 	}
 	if strings.Contains(rr.Body.String(), "base64") {

@@ -66,9 +66,10 @@ func New(cfg config.Config) http.Handler {
 		assetStore = assetS3Store
 	}
 	browserSvc := browser.NewServiceWithOptions(browser.ServiceOptions{
-		Sessions: manager,
-		State:    runtime.NewState(),
-		Assets:   assetStore,
+		Sessions:    manager,
+		State:       runtime.NewState(),
+		Assets:      assetStore,
+		AssetBucket: cfg.ProfileBucket,
 		ProxyHop: browser.ProxyHopOptions{
 			Mode:        cfg.ProxyHop,
 			WorkerURL:   cfg.ProxyWorkerURL,
