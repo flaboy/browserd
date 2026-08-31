@@ -665,7 +665,7 @@ func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 	out, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
 		Format:             "png",
 		ScreenshotS3Prefix: "/browser-screenshots/2026-08/team_1/conv_1/",
-	}, []byte("png-bytes"), "png", "image/png")
+	}, validPNGBytes(), "png", "image/png")
 	if err != nil {
 		t.Fatalf("persistScreenshot returned error: %v", err)
 	}
@@ -685,9 +685,25 @@ func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 	}
 }
 
+func TestPersistScreenshot_RejectsPNGContentMismatch(t *testing.T) {
+	store := &fakeAssetStore{}
+	svc := &Service{assets: store, assetBucket: "private"}
+
+	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
+		Format:             "png",
+		ScreenshotS3Prefix: "/browser-screenshots/2026-08/team_1/conv_1/",
+	}, []byte{0xff, 0xd8, 0xff, 0xe0}, "png", "image/png")
+	if !errors.Is(err, ErrScreenshotFailed) {
+		t.Fatalf("expected screenshot failure for png metadata with jpeg bytes, got %v", err)
+	}
+	if len(store.puts) != 0 {
+		t.Fatalf("mismatched screenshot bytes must not be uploaded, got %+v", store.puts)
+	}
+}
+
 func TestPersistScreenshot_RequiresS3Prefix(t *testing.T) {
 	svc := &Service{assets: &fakeAssetStore{}, assetBucket: "private"}
-	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{}, []byte("png-bytes"), "png", "image/png")
+	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{}, validPNGBytes(), "png", "image/png")
 	if err == nil {
 		t.Fatalf("expected missing screenshotS3Prefix to fail")
 	}
@@ -697,10 +713,14 @@ func TestPersistScreenshot_RejectsFullS3Prefix(t *testing.T) {
 	svc := &Service{assets: &fakeAssetStore{}, assetBucket: "private"}
 	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
 		ScreenshotS3Prefix: "s3://private/browser-screenshots/2026-08/team_1/conv_1/",
-	}, []byte("png-bytes"), "png", "image/png")
+	}, validPNGBytes(), "png", "image/png")
 	if err == nil {
 		t.Fatalf("expected full s3 screenshot prefix to fail")
 	}
+}
+
+func validPNGBytes() []byte {
+	return append([]byte(nil), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}...)
 }
 
 func TestScreenshotExt_RejectsJPEGUntilEncoderExists(t *testing.T) {

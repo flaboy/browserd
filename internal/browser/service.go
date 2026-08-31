@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -465,7 +466,7 @@ func (s *Service) uploadAfterNavigate(ctx context.Context, s3Path string) error 
 
 func capturePagePNG(ctx context.Context) ([]byte, error) {
 	var png []byte
-	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&png, 90)); err != nil {
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&png, 100)); err != nil {
 		return nil, err
 	}
 	return png, nil
@@ -1717,11 +1718,13 @@ func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (Sc
 			return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
 		}
 	default:
-		quality := 90
-		if input.Quality > 0 {
-			quality = input.Quality
+		if input.FullPage {
+			if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 100)); err != nil {
+				return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
+			}
+			break
 		}
-		if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, quality)); err != nil {
+		if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
 			return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
 		}
 	}
@@ -1765,6 +1768,9 @@ func (s *Service) persistScreenshot(ctx context.Context, input ScreenshotInput, 
 	if len(body) == 0 {
 		return ScreenshotOutput{}, ErrScreenshotFailed
 	}
+	if !validScreenshotBytes(body, contentType) {
+		return ScreenshotOutput{}, fmt.Errorf("%w: screenshot bytes do not match %s", ErrScreenshotFailed, contentType)
+	}
 	screenshotID, err := newScreenshotID(ext)
 	if err != nil {
 		return ScreenshotOutput{}, err
@@ -1780,6 +1786,15 @@ func (s *Service) persistScreenshot(ctx context.Context, input ScreenshotInput, 
 		ContentType:  contentType,
 		ByteLength:   len(body),
 	}, nil
+}
+
+func validScreenshotBytes(body []byte, contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/png":
+		return bytes.HasPrefix(body, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	default:
+		return false
+	}
 }
 
 func (s *Service) Evaluate(runtimeSessionID string, input EvaluateInput) (EvaluateOutput, error) {
