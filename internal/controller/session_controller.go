@@ -163,10 +163,11 @@ type waitForRequest struct {
 }
 
 type screenshotRequest struct {
-	Ref      string `json:"ref,omitempty"`
-	FullPage bool   `json:"fullPage,omitempty"`
-	Format   string `json:"format,omitempty"`
-	Quality  int    `json:"quality,omitempty"`
+	Ref                string `json:"ref,omitempty"`
+	FullPage           bool   `json:"fullPage,omitempty"`
+	Format             string `json:"format,omitempty"`
+	Quality            int    `json:"quality,omitempty"`
+	ScreenshotS3Prefix string `json:"screenshotS3Prefix,omitempty"`
 }
 
 type uploadFileSourceRequest struct {
@@ -465,10 +466,11 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	out, err := h.browser.Screenshot(runtimeSessionID, browser.ScreenshotInput{
-		Ref:      req.Ref,
-		FullPage: req.FullPage,
-		Format:   req.Format,
-		Quality:  req.Quality,
+		Ref:                req.Ref,
+		FullPage:           req.FullPage,
+		Format:             req.Format,
+		Quality:            req.Quality,
+		ScreenshotS3Prefix: req.ScreenshotS3Prefix,
 	})
 	if err != nil {
 		writeBrowserErr(w, err)

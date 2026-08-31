@@ -2,7 +2,7 @@ package browser
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,16 +119,18 @@ type ActOutput struct {
 }
 
 type ScreenshotInput struct {
-	Ref      string `json:"ref,omitempty"`
-	FullPage bool   `json:"fullPage,omitempty"`
-	Format   string `json:"format,omitempty"`
-	Quality  int    `json:"quality,omitempty"`
+	Ref                string `json:"ref,omitempty"`
+	FullPage           bool   `json:"fullPage,omitempty"`
+	Format             string `json:"format,omitempty"`
+	Quality            int    `json:"quality,omitempty"`
+	ScreenshotS3Prefix string `json:"screenshotS3Prefix,omitempty"`
 }
 
 type ScreenshotOutput struct {
-	ContentType string `json:"contentType"`
-	Base64      string `json:"base64"`
-	ByteLength  int    `json:"byteLength"`
+	ScreenshotID string `json:"screenshotId"`
+	S3Path       string `json:"s3Path"`
+	ContentType  string `json:"contentType"`
+	ByteLength   int    `json:"byteLength"`
 }
 
 type UploadFileSource struct {
@@ -1693,7 +1695,8 @@ func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (Sc
 	if format == "" {
 		format = "png"
 	}
-	if format != "png" && format != "jpeg" {
+	ext, contentType, err := screenshotExt(format)
+	if err != nil {
 		return ScreenshotOutput{}, ErrInvalidRequest
 	}
 
@@ -1720,14 +1723,54 @@ func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (Sc
 		}
 	}
 
-	contentType := "image/png"
-	if format == "jpeg" {
-		contentType = "image/jpeg"
+	return s.persistScreenshot(ctx, input, buf, ext, contentType)
+}
+
+func screenshotExt(format string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "png":
+		return "png", "image/png", nil
+	default:
+		return "", "", ErrInvalidRequest
+	}
+}
+
+func newScreenshotID(ext string) (string, error) {
+	ext = strings.TrimPrefix(strings.TrimSpace(ext), ".")
+	if ext == "" {
+		return "", ErrInvalidRequest
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x.%s", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16], ext), nil
+}
+
+func (s *Service) persistScreenshot(ctx context.Context, input ScreenshotInput, body []byte, ext string, contentType string) (ScreenshotOutput, error) {
+	prefix := strings.TrimSpace(input.ScreenshotS3Prefix)
+	if prefix == "" || !strings.HasPrefix(prefix, "s3://") || !strings.HasSuffix(prefix, "/") {
+		return ScreenshotOutput{}, ErrInvalidRequest
+	}
+	if s.assets == nil {
+		return ScreenshotOutput{}, fmt.Errorf("asset store not configured")
+	}
+	if len(body) == 0 {
+		return ScreenshotOutput{}, ErrScreenshotFailed
+	}
+	screenshotID, err := newScreenshotID(ext)
+	if err != nil {
+		return ScreenshotOutput{}, err
+	}
+	s3Path := prefix + screenshotID
+	if err := s.assets.Put(ctx, s3Path, body, contentType); err != nil {
+		return ScreenshotOutput{}, err
 	}
 	return ScreenshotOutput{
-		ContentType: contentType,
-		Base64:      base64.StdEncoding.EncodeToString(buf),
-		ByteLength:  len(buf),
+		ScreenshotID: screenshotID,
+		S3Path:       s3Path,
+		ContentType:  contentType,
+		ByteLength:   len(body),
 	}, nil
 }
 

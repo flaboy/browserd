@@ -658,6 +658,46 @@ func TestUploadAfterNavigate_ReturnsCaptureError(t *testing.T) {
 	}
 }
 
+func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
+	store := &fakeAssetStore{}
+	svc := &Service{assets: store}
+
+	out, err := svc.persistScreenshot(context.Background(), ScreenshotInput{
+		Format:             "png",
+		ScreenshotS3Prefix: "s3://private/browser-screenshots/2026-08/team_1/conv_1/",
+	}, []byte("png-bytes"), "png", "image/png")
+	if err != nil {
+		t.Fatalf("persistScreenshot returned error: %v", err)
+	}
+	if out.ScreenshotID == "" || !strings.HasSuffix(out.ScreenshotID, ".png") {
+		t.Fatalf("expected png screenshot id, got %+v", out)
+	}
+	wantURI := "s3://private/browser-screenshots/2026-08/team_1/conv_1/" + out.ScreenshotID
+	if out.S3Path != wantURI {
+		t.Fatalf("unexpected s3 path: got %q want %q", out.S3Path, wantURI)
+	}
+	if len(store.puts) != 1 || store.puts[0].URI != wantURI {
+		t.Fatalf("expected one upload to generated path, got %+v", store.puts)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", out), "base64") {
+		t.Fatalf("output must not contain base64 fields: %+v", out)
+	}
+}
+
+func TestPersistScreenshot_RequiresS3Prefix(t *testing.T) {
+	svc := &Service{assets: &fakeAssetStore{}}
+	_, err := svc.persistScreenshot(context.Background(), ScreenshotInput{}, []byte("png-bytes"), "png", "image/png")
+	if err == nil {
+		t.Fatalf("expected missing screenshotS3Prefix to fail")
+	}
+}
+
+func TestScreenshotExt_RejectsJPEGUntilEncoderExists(t *testing.T) {
+	if _, _, err := screenshotExt("jpeg"); err == nil {
+		t.Fatalf("expected jpeg to be rejected until screenshot bytes are encoded as jpeg")
+	}
+}
+
 func TestUploadFilesUsesFileChooserFlow(t *testing.T) {
 	source, err := os.ReadFile("service.go")
 	if err != nil {
