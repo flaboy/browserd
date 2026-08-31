@@ -685,6 +685,51 @@ func TestPersistScreenshot_UploadsToGeneratedS3Path(t *testing.T) {
 	}
 }
 
+func TestScreenshotMode_DefaultsToViewport(t *testing.T) {
+	got, err := normalizeScreenshotMode(ScreenshotInput{})
+	if err != nil {
+		t.Fatalf("normalizeScreenshotMode returned error: %v", err)
+	}
+	if got != "viewport" {
+		t.Fatalf("expected viewport default, got %q", got)
+	}
+}
+
+func TestScreenshotMode_RequiresSelectorForSelectorMode(t *testing.T) {
+	_, err := normalizeScreenshotMode(ScreenshotInput{Mode: "selector"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected selector mode without selector to fail, got %v", err)
+	}
+}
+
+func TestScreenshotMode_RejectsSelectorOutsideSelectorMode(t *testing.T) {
+	_, err := normalizeScreenshotMode(ScreenshotInput{Mode: "viewport", Selector: "form"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected selector with viewport mode to fail, got %v", err)
+	}
+}
+
+func TestScreenshotMode_RejectsUnsupportedMode(t *testing.T) {
+	_, err := normalizeScreenshotMode(ScreenshotInput{Mode: "element", Selector: "form"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected unsupported mode to fail, got %v", err)
+	}
+}
+
+func TestScreenshotMode_RejectsRef(t *testing.T) {
+	_, err := normalizeScreenshotMode(ScreenshotInput{Ref: "e1"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected ref screenshot to fail, got %v", err)
+	}
+}
+
+func TestScreenshotMode_RejectsFullPage(t *testing.T) {
+	_, err := normalizeScreenshotMode(ScreenshotInput{FullPage: true})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected fullPage screenshot to fail, got %v", err)
+	}
+}
+
 func TestPersistScreenshot_RejectsPNGContentMismatch(t *testing.T) {
 	store := &fakeAssetStore{}
 	svc := &Service{assets: store, assetBucket: "private"}

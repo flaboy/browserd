@@ -120,6 +120,8 @@ type ActOutput struct {
 }
 
 type ScreenshotInput struct {
+	Mode               string `json:"mode,omitempty"`
+	Selector           string `json:"selector,omitempty"`
 	Ref                string `json:"ref,omitempty"`
 	FullPage           bool   `json:"fullPage,omitempty"`
 	Format             string `json:"format,omitempty"`
@@ -1688,6 +1690,12 @@ func pageGroupsToState(groups map[string]PageTable) map[string]any {
 	return out
 }
 
+const (
+	screenshotModeViewport = "viewport"
+	screenshotModeFullPage = "fullpage"
+	screenshotModeSelector = "selector"
+)
+
 func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (ScreenshotOutput, error) {
 	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, 20_000)
 	if err != nil {
@@ -1704,32 +1712,59 @@ func (s *Service) Screenshot(runtimeSessionID string, input ScreenshotInput) (Sc
 		return ScreenshotOutput{}, ErrInvalidRequest
 	}
 
+	mode, err := normalizeScreenshotMode(input)
+	if err != nil {
+		return ScreenshotOutput{}, err
+	}
+
 	var buf []byte
-	switch {
-	case input.Ref != "":
-		if input.FullPage {
-			return ScreenshotOutput{}, ErrInvalidRequest
+	switch mode {
+	case screenshotModeSelector:
+		selector := strings.TrimSpace(input.Selector)
+		if _, err := queryTargetBySelector(ctx, selector, true); err != nil {
+			return ScreenshotOutput{}, fmt.Errorf("%w: selector must match exactly one visible element: %v", ErrInvalidRequest, err)
 		}
-		refState, err := s.state.GetRef(runtimeSessionID, input.Ref)
-		if err != nil {
-			return ScreenshotOutput{}, err
-		}
-		if err := chromedp.Run(ctx, chromedp.Screenshot(refState.Selector, &buf, chromedp.ByQuery)); err != nil {
+		if err := chromedp.Run(ctx, chromedp.Screenshot(selector, &buf, chromedp.ByQuery)); err != nil {
 			return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
 		}
-	default:
-		if input.FullPage {
-			if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 100)); err != nil {
-				return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
-			}
-			break
+	case screenshotModeFullPage:
+		if err := chromedp.Run(ctx, chromedp.FullScreenshot(&buf, 100)); err != nil {
+			return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
 		}
+	case screenshotModeViewport:
 		if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf)); err != nil {
 			return ScreenshotOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
 		}
 	}
 
 	return s.persistScreenshot(ctx, input, buf, ext, contentType)
+}
+
+func normalizeScreenshotMode(input ScreenshotInput) (string, error) {
+	if strings.TrimSpace(input.Ref) != "" {
+		return "", fmt.Errorf("%w: ref is not supported for screenshot; use mode selector with selector", ErrInvalidRequest)
+	}
+	if input.FullPage {
+		return "", fmt.Errorf("%w: fullPage is not supported for screenshot; use mode fullpage", ErrInvalidRequest)
+	}
+	mode := strings.TrimSpace(input.Mode)
+	if mode == "" {
+		mode = screenshotModeViewport
+	}
+	selector := strings.TrimSpace(input.Selector)
+	switch mode {
+	case screenshotModeViewport, screenshotModeFullPage:
+		if selector != "" {
+			return "", fmt.Errorf("%w: selector is only supported when mode is selector", ErrInvalidRequest)
+		}
+	case screenshotModeSelector:
+		if selector == "" {
+			return "", fmt.Errorf("%w: selector is required when mode is selector", ErrInvalidRequest)
+		}
+	default:
+		return "", fmt.Errorf("%w: unsupported screenshot mode %q; use viewport, fullpage, or selector", ErrInvalidRequest, mode)
+	}
+	return mode, nil
 }
 
 func screenshotExt(format string) (string, string, error) {

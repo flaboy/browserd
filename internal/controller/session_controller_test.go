@@ -864,7 +864,8 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 	handler := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/screenshot", bytes.NewReader([]byte(`{
-		"ref":"e2",
+		"mode":"selector",
+		"selector":"form.login-panel",
 		"format":"png",
 		"screenshotS3Prefix":"/browser-screenshots/2026-08/team_1/conv_1/"
 	}`)))
@@ -879,7 +880,7 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 		t.Fatalf("expected one screenshot call, got %+v", browserRuntime.screenshotCalls)
 	}
 	got := browserRuntime.screenshotCalls[0]
-	if got.Ref != "e2" || got.Format != "png" || got.ScreenshotS3Prefix != "/browser-screenshots/2026-08/team_1/conv_1/" {
+	if got.Mode != "selector" || got.Selector != "form.login-panel" || got.Format != "png" || got.ScreenshotS3Prefix != "/browser-screenshots/2026-08/team_1/conv_1/" {
 		t.Fatalf("unexpected screenshot input: %+v", got)
 	}
 	if strings.Contains(rr.Body.String(), "base64") {
@@ -887,6 +888,75 @@ func TestScreenshot_ForwardsS3PrefixAndReturnsArtifactMetadata(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"screenshotId":"123e4567-e89b-12d3-a456-426614174000.png"`) {
 		t.Fatalf("missing screenshotId in response: %s", rr.Body.String())
+	}
+}
+
+func TestScreenshot_DefaultsToViewportMode(t *testing.T) {
+	browserRuntime := &fakeBrowserRuntime{
+		screenshotOut: browser.ScreenshotOutput{
+			ScreenshotID: "shot.png",
+			S3Path:       "/browser-screenshots/2026-08/team_1/conv_1/shot.png",
+			ContentType:  "image/png",
+			ByteLength:   9,
+		},
+	}
+	handler := controller.NewSessionController(&fakeSessionManager{}, browserRuntime, "ws://browserd:9222/devtools/browser")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/screenshot", bytes.NewReader([]byte(`{
+		"format":"png",
+		"screenshotS3Prefix":"/browser-screenshots/2026-08/team_1/conv_1/"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Screenshot(rr, req, "rt_1")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.screenshotCalls) != 1 {
+		t.Fatalf("expected one screenshot call, got %+v", browserRuntime.screenshotCalls)
+	}
+	got := browserRuntime.screenshotCalls[0]
+	if got.Mode != "viewport" || got.Selector != "" {
+		t.Fatalf("expected viewport default, got %+v", got)
+	}
+}
+
+func TestScreenshot_RejectsRef(t *testing.T) {
+	handler := controller.NewSessionController(&fakeSessionManager{}, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/screenshot", bytes.NewReader([]byte(`{
+		"ref":"e104",
+		"format":"png",
+		"screenshotS3Prefix":"/browser-screenshots/2026-08/team_1/conv_1/"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Screenshot(rr, req, "rt_1")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "ref is not supported") {
+		t.Fatalf("expected ref rejection, got %s", rr.Body.String())
+	}
+}
+
+func TestScreenshot_RejectsFullPage(t *testing.T) {
+	handler := controller.NewSessionController(&fakeSessionManager{}, &fakeBrowserRuntime{}, "ws://browserd:9222/devtools/browser")
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/rt_1/screenshot", bytes.NewReader([]byte(`{
+		"fullPage":true,
+		"format":"png",
+		"screenshotS3Prefix":"/browser-screenshots/2026-08/team_1/conv_1/"
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Screenshot(rr, req, "rt_1")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "fullPage is not supported") {
+		t.Fatalf("expected fullPage rejection, got %s", rr.Body.String())
 	}
 }
 

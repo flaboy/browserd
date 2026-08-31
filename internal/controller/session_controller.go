@@ -163,11 +163,13 @@ type waitForRequest struct {
 }
 
 type screenshotRequest struct {
-	Ref                string `json:"ref,omitempty"`
-	FullPage           bool   `json:"fullPage,omitempty"`
-	Format             string `json:"format,omitempty"`
-	Quality            int    `json:"quality,omitempty"`
-	ScreenshotS3Prefix string `json:"screenshotS3Prefix,omitempty"`
+	Mode               string  `json:"mode,omitempty"`
+	Selector           string  `json:"selector,omitempty"`
+	Ref                *string `json:"ref,omitempty"`
+	FullPage           *bool   `json:"fullPage,omitempty"`
+	Format             string  `json:"format,omitempty"`
+	Quality            int     `json:"quality,omitempty"`
+	ScreenshotS3Prefix string  `json:"screenshotS3Prefix,omitempty"`
 }
 
 type uploadFileSourceRequest struct {
@@ -465,9 +467,21 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 	if !h.touchSession(w, runtimeSessionID) {
 		return
 	}
+	if req.Ref != nil {
+		writeBrowserErr(w, fmt.Errorf("%w: ref is not supported for screenshot; use mode selector with selector", browser.ErrInvalidRequest))
+		return
+	}
+	if req.FullPage != nil {
+		writeBrowserErr(w, fmt.Errorf("%w: fullPage is not supported for screenshot; use mode fullpage", browser.ErrInvalidRequest))
+		return
+	}
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		mode = "viewport"
+	}
 	out, err := h.browser.Screenshot(runtimeSessionID, browser.ScreenshotInput{
-		Ref:                req.Ref,
-		FullPage:           req.FullPage,
+		Mode:               mode,
+		Selector:           req.Selector,
 		Format:             req.Format,
 		Quality:            req.Quality,
 		ScreenshotS3Prefix: req.ScreenshotS3Prefix,
