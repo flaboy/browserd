@@ -43,6 +43,7 @@ func NewS3Store(cfg S3StoreConfig) (*S3Store, error) {
 		context.Background(),
 		awsConfig.WithRegion(cfg.Region),
 		awsConfig.WithCredentialsProvider(creds),
+		awsConfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 	)
 	if err != nil {
 		return nil, err
@@ -60,10 +61,11 @@ func (s *S3Store) Put(ctx context.Context, uri string, body []byte, contentType 
 		return err
 	}
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        bytes.NewReader(body),
-		ContentType: aws.String(strings.TrimSpace(contentType)),
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+		ContentType:   aws.String(strings.TrimSpace(contentType)),
 	})
 	return err
 }
