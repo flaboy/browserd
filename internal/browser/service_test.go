@@ -191,6 +191,32 @@ func TestBuildChromeArgs_KeepsAboutBlankBootstrapPage(t *testing.T) {
 	}
 }
 
+func TestChromedpErrorLoggerSuppressesIPAddressSpacePrivateDecodeNoise(t *testing.T) {
+	var logs []string
+	logger := chromedpErrorLogger(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	logger("could not unmarshal event: json: unable to unmarshal JSON string into Go network.IPAddressSpace within %q: unknown IPAddressSpace value: Private", "/clientSecurityState/initiatorIPAddressSpace")
+
+	if len(logs) != 0 {
+		t.Fatalf("expected IPAddressSpace Private decode noise to be suppressed, got %q", logs)
+	}
+}
+
+func TestChromedpErrorLoggerKeepsOtherErrors(t *testing.T) {
+	var logs []string
+	logger := chromedpErrorLogger(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	logger("could not unmarshal event: %s", "unexpected payload")
+
+	if len(logs) != 1 || !strings.Contains(logs[0], "unexpected payload") {
+		t.Fatalf("expected unrelated chromedp error to be logged, got %q", logs)
+	}
+}
+
 func TestBuildChromeArgs_HeadedWhenLiveViewEnabled(t *testing.T) {
 	args := buildChromeArgs(BrowserOptions{UserDataDir: "/tmp/profile", Headless: false})
 	for _, arg := range args {

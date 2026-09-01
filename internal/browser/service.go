@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -49,6 +50,19 @@ var (
 	ErrProxyHopFailed          = errors.New("proxy hop failed")
 	ErrProfileCheckpointFailed = errors.New("profile checkpoint failed")
 )
+
+func chromedpErrorLogger(logf func(string, ...any)) func(string, ...any) {
+	return func(format string, args ...any) {
+		message := fmt.Sprintf(format, args...)
+		if strings.Contains(message, "could not unmarshal event:") &&
+			strings.Contains(message, "network.IPAddressSpace") &&
+			strings.Contains(message, "/clientSecurityState/initiatorIPAddressSpace") &&
+			strings.Contains(message, "unknown IPAddressSpace value: Private") {
+			return
+		}
+		logf("%s", message)
+	}
+}
 
 type NavigateInput struct {
 	URL                       string
@@ -2013,7 +2027,9 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(rootCtx, wsURL)
-	pageCtx, pageCancel := chromedp.NewContext(allocCtx)
+	pageCtx, pageCancel := chromedp.NewContext(allocCtx, chromedp.WithErrorf(chromedpErrorLogger(func(format string, args ...any) {
+		log.Printf("ERROR: "+format, args...)
+	})))
 	if err := chromedp.Run(pageCtx); err != nil {
 		pageCancel()
 		allocCancel()
