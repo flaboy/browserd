@@ -198,6 +198,7 @@ func TestChromedpErrorLoggerSuppressesIPAddressSpacePrivateDecodeNoise(t *testin
 	})
 
 	logger("could not unmarshal event: json: unable to unmarshal JSON string into Go network.IPAddressSpace within %q: unknown IPAddressSpace value: Private", "/clientSecurityState/initiatorIPAddressSpace")
+	logger("could not unmarshal event: json: cannot unmarshal JSON string into Go network.IPAddressSpace within %q: unknown IPAddressSpace value: Private", "/resourceIPAddressSpace")
 
 	if len(logs) != 0 {
 		t.Fatalf("expected IPAddressSpace Private decode noise to be suppressed, got %q", logs)

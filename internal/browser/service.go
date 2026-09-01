@@ -56,7 +56,6 @@ func chromedpErrorLogger(logf func(string, ...any)) func(string, ...any) {
 		message := fmt.Sprintf(format, args...)
 		if strings.Contains(message, "could not unmarshal event:") &&
 			strings.Contains(message, "network.IPAddressSpace") &&
-			strings.Contains(message, "/clientSecurityState/initiatorIPAddressSpace") &&
 			strings.Contains(message, "unknown IPAddressSpace value: Private") {
 			return
 		}
