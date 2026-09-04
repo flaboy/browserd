@@ -19,6 +19,8 @@ import (
 	"browserd/internal/profile"
 	"browserd/internal/router"
 	"browserd/internal/session"
+
+	browserdclient "github.com/flaboy/browserd-client-go/pkg/browserd"
 )
 
 type fakeBrowserRuntime struct {
@@ -44,6 +46,9 @@ type fakeBrowserRuntime struct {
 	evaluateCalls   []browser.EvaluateInput
 	evaluateOut     browser.EvaluateOutput
 	evaluateErr     error
+	pageToolCalls   []browserdclient.PageToolInput
+	pageToolOut     browserdclient.PageToolResult
+	pageToolErr     error
 	waitForCalls    []browser.WaitForInput
 	waitForOut      browser.WaitForOutput
 	waitForErr      error
@@ -109,6 +114,14 @@ func (f *fakeBrowserRuntime) UploadFiles(_ string, input browser.UploadFilesInpu
 func (f *fakeBrowserRuntime) Evaluate(_ string, input browser.EvaluateInput) (browser.EvaluateOutput, error) {
 	f.evaluateCalls = append(f.evaluateCalls, input)
 	return f.evaluateOut, f.evaluateErr
+}
+
+func (f *fakeBrowserRuntime) PageTool(_ string, input browserdclient.PageToolInput) (browserdclient.PageToolResult, error) {
+	f.pageToolCalls = append(f.pageToolCalls, input)
+	if f.pageToolOut != nil || f.pageToolErr != nil {
+		return f.pageToolOut, f.pageToolErr
+	}
+	return browserdclient.PageToolResult{"value": "Example"}, nil
 }
 
 func (f *fakeBrowserRuntime) WaitFor(_ string, input browser.WaitForInput) (browser.WaitForOutput, error) {
@@ -1202,6 +1215,66 @@ func TestEvaluate_ReturnsJSONResult(t *testing.T) {
 	}
 	if browserRuntime.evaluateCalls[0].Script != "return { title: document.title }" {
 		t.Fatalf("unexpected script: %+v", browserRuntime.evaluateCalls[0])
+	}
+}
+
+func TestPageTool_ForwardsCurrentContract(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/pageTool", strings.NewReader(`{"method":"page.title","payload":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.PageTool(rr, req, rid)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.pageToolCalls) != 1 || browserRuntime.pageToolCalls[0].Method != "page.title" {
+		t.Fatalf("unexpected calls: %#v", browserRuntime.pageToolCalls)
+	}
+}
+
+func TestEvaluate_ForwardsPageToolBridgeConfig(t *testing.T) {
+	manager := session.NewManager(session.ManagerOptions{
+		Store:      profile.NewMemoryStore(),
+		Workdir:    t.TempDir(),
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	browserRuntime := &fakeBrowserRuntime{
+		evaluateOut: browser.EvaluateOutput{
+			Result: map[string]any{"ok": true},
+			URL:    "https://example.com/",
+			Title:  "Example",
+		},
+	}
+	handler := controller.NewSessionControllerWithLive(controller.SessionControllerOptions{
+		Manager:    manager,
+		Browser:    browserRuntime,
+		CDPBaseURL: "ws://browserd:9222/devtools/browser",
+	})
+	rid := createTestSession(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/sessions/"+rid+"/evaluate", strings.NewReader(`{"script":"return true","pageToolBridge":{"enabled":true,"name":"__browserdPageToolCall"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.Evaluate(rr, req, rid)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(browserRuntime.evaluateCalls) != 1 || browserRuntime.evaluateCalls[0].PageToolBridge == nil || !browserRuntime.evaluateCalls[0].PageToolBridge.Enabled {
+		t.Fatalf("pageTool bridge was not forwarded: %#v", browserRuntime.evaluateCalls)
 	}
 }
 

@@ -192,6 +192,14 @@ func New(cfg config.Config) http.Handler {
 			}
 			handler.WaitFor(w, r, id)
 			return
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/pageTool"):
+			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/pageTool"))
+			if !ok {
+				types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid runtimeSessionId")
+				return
+			}
+			handler.PageTool(w, r, id)
+			return
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/evaluate"):
 			id, ok := controller.ExtractRuntimeSessionID(strings.TrimSuffix(r.URL.Path, "/evaluate"))
 			if !ok {

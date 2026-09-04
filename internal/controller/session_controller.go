@@ -22,6 +22,8 @@ import (
 	"browserd/internal/runtime"
 	"browserd/internal/session"
 	"browserd/internal/types"
+
+	browserdclient "github.com/flaboy/browserd-client-go/pkg/browserd"
 )
 
 type SessionController struct {
@@ -48,6 +50,7 @@ type browserRuntime interface {
 	Screenshot(runtimeSessionID string, input browser.ScreenshotInput) (browser.ScreenshotOutput, error)
 	UploadFiles(runtimeSessionID string, input browser.UploadFilesInput) (browser.UploadFilesOutput, error)
 	Evaluate(runtimeSessionID string, input browser.EvaluateInput) (browser.EvaluateOutput, error)
+	PageTool(runtimeSessionID string, input browserdclient.PageToolInput) (browserdclient.PageToolResult, error)
 }
 
 type browserPointerRuntime interface {
@@ -188,11 +191,12 @@ type uploadFilesRequest struct {
 }
 
 type evaluateRequest struct {
-	Script             string `json:"script"`
-	Args               []any  `json:"args,omitempty"`
-	TimeoutMs          int    `json:"timeoutMs,omitempty"`
-	World              string `json:"world,omitempty"`
-	AllowDuringHandoff bool   `json:"allowDuringHandoff,omitempty"`
+	Script             string                               `json:"script"`
+	Args               []any                                `json:"args,omitempty"`
+	TimeoutMs          int                                  `json:"timeoutMs,omitempty"`
+	World              string                               `json:"world,omitempty"`
+	AllowDuringHandoff bool                                 `json:"allowDuringHandoff,omitempty"`
+	PageToolBridge     *browserdclient.PageToolBridgeConfig `json:"pageToolBridge,omitempty"`
 }
 
 type liveViewRequest struct {
@@ -551,11 +555,41 @@ func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, run
 		return
 	}
 	out, err := h.browser.Evaluate(runtimeSessionID, browser.EvaluateInput{
-		Script:    req.Script,
-		Args:      req.Args,
-		TimeoutMs: req.TimeoutMs,
-		World:     req.World,
+		Script:         req.Script,
+		Args:           req.Args,
+		TimeoutMs:      req.TimeoutMs,
+		World:          req.World,
+		PageToolBridge: req.PageToolBridge,
 	})
+	if err != nil {
+		writeBrowserErr(w, err)
+		return
+	}
+	types.WriteOK(w, http.StatusOK, out)
+}
+
+func (h *SessionController) PageTool(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	if h.browser == nil {
+		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
+		return
+	}
+	var req browserdclient.PageToolInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
+		return
+	}
+	if err := browserdclient.ValidatePageToolInput(req); err != nil {
+		types.WriteErr(w, http.StatusBadRequest, "PAGETOOL_REQUEST_INVALID", err.Error())
+		return
+	}
+	if !h.touchSession(w, runtimeSessionID) {
+		return
+	}
+	if h.hasActiveHandoff(runtimeSessionID) {
+		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
+		return
+	}
+	out, err := h.browser.PageTool(runtimeSessionID, req)
 	if err != nil {
 		writeBrowserErr(w, err)
 		return

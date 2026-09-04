@@ -32,6 +32,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
+	browserdclient "github.com/flaboy/browserd-client-go/pkg/browserd"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -171,10 +172,11 @@ type UploadFilesOutput struct {
 }
 
 type EvaluateInput struct {
-	Script    string `json:"script"`
-	Args      []any  `json:"args,omitempty"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
-	World     string `json:"world,omitempty"`
+	Script         string                               `json:"script"`
+	Args           []any                                `json:"args,omitempty"`
+	TimeoutMs      int                                  `json:"timeoutMs,omitempty"`
+	World          string                               `json:"world,omitempty"`
+	PageToolBridge *browserdclient.PageToolBridgeConfig `json:"pageToolBridge,omitempty"`
 }
 
 type EvaluateOutput struct {
