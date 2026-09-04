@@ -1848,6 +1848,9 @@ func validScreenshotBytes(body []byte, contentType string) bool {
 }
 
 func (s *Service) Evaluate(runtimeSessionID string, input EvaluateInput) (EvaluateOutput, error) {
+	if input.PageToolBridge != nil && input.PageToolBridge.Enabled {
+		return s.evaluateWithPageToolBridge(runtimeSessionID, input)
+	}
 	if strings.TrimSpace(input.Script) == "" {
 		return EvaluateOutput{}, ErrInvalidRequest
 	}
