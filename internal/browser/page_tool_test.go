@@ -10,7 +10,7 @@ import (
 
 func TestPageToolRejectsUnsupportedMethods(t *testing.T) {
 	svc := &Service{}
-	_, err := svc.PageTool("rt_1", browserdclient.PageToolInput{Method: "visual.getViewportContent"})
+	_, err := svc.PageTool("rt_1", browserdclient.PageToolInput{Method: "browser.unsupported"})
 	var browserErr browserdclient.Error
 	if !browserdclient.AsError(err, &browserErr) || browserErr.Code != "browserd_pagetool_method_unsupported" {
 		t.Fatalf("expected unsupported method error, got %v", err)
