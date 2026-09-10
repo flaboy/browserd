@@ -69,7 +69,7 @@ func (f fakeUploadSessionManager) Touch(string) error {
 	return nil
 }
 
-func (f fakeUploadSessionManager) ClaimExpired(time.Time) []session.SessionInfo {
+func (f fakeUploadSessionManager) ClaimExpired(time.Time, ...string) []session.SessionInfo {
 	return nil
 }
 

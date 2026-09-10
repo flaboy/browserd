@@ -27,6 +27,7 @@ import (
 )
 
 type SessionController struct {
+	operations    sessionOperationGuard
 	manager       session.Manager
 	browser       browserRuntime
 	cdpBaseURL    string
@@ -283,6 +284,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	var req commitSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
@@ -316,6 +322,11 @@ func (h *SessionController) CommitSession(w http.ResponseWriter, r *http.Request
 }
 
 func (h *SessionController) DeleteSession(w http.ResponseWriter, _ *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser != nil {
 		_ = h.browser.Close(runtimeSessionID)
 	}
@@ -333,6 +344,11 @@ func (h *SessionController) DeleteSession(w http.ResponseWriter, _ *http.Request
 }
 
 func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -368,6 +384,11 @@ func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, run
 }
 
 func (h *SessionController) Snapshot(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -388,6 +409,11 @@ func (h *SessionController) Snapshot(w http.ResponseWriter, r *http.Request, run
 }
 
 func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -435,6 +461,11 @@ func (h *SessionController) Act(w http.ResponseWriter, r *http.Request, runtimeS
 }
 
 func (h *SessionController) WaitFor(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -465,6 +496,11 @@ func (h *SessionController) WaitFor(w http.ResponseWriter, r *http.Request, runt
 }
 
 func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -504,6 +540,11 @@ func (h *SessionController) Screenshot(w http.ResponseWriter, r *http.Request, r
 }
 
 func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -544,6 +585,11 @@ func (h *SessionController) UploadFiles(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -575,6 +621,11 @@ func (h *SessionController) Evaluate(w http.ResponseWriter, r *http.Request, run
 }
 
 func (h *SessionController) PageTool(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if h.browser == nil {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", "browser runtime not configured")
 		return
@@ -604,6 +655,11 @@ func (h *SessionController) PageTool(w http.ResponseWriter, r *http.Request, run
 }
 
 func (h *SessionController) LiveView(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	req, ok := h.decodeLiveViewRequest(w, r)
 	if !ok {
 		return
@@ -617,6 +673,11 @@ func (h *SessionController) LiveView(w http.ResponseWriter, r *http.Request, run
 }
 
 func (h *SessionController) StartHandoff(w http.ResponseWriter, r *http.Request, runtimeSessionID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	req, ok := h.decodeLiveViewRequest(w, r)
 	if !ok {
 		return
@@ -653,6 +714,11 @@ func (h *SessionController) StartHandoff(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *SessionController) CompleteHandoff(w http.ResponseWriter, _ *http.Request, runtimeSessionID string, handoffID string) {
+	release, acquired := h.beginOperation(w, runtimeSessionID)
+	if !acquired {
+		return
+	}
+	defer release()
 	if ok := h.completeHandoff(runtimeSessionID, handoffID); !ok {
 		types.WriteErr(w, http.StatusNotFound, "HANDOFF_NOT_FOUND", "handoff not found")
 		return
@@ -1006,7 +1072,21 @@ func (h *SessionController) StartExpiredSessionReaper(ctx context.Context, inter
 }
 
 func (h *SessionController) ReapExpiredSessions(now time.Time) int {
-	expired := h.manager.ClaimExpired(now)
+	// Atomically exclude active operations and reserve claimed sessions before
+	// releasing admission control, so neither navigation nor deletion can race.
+	h.operations.mu.Lock()
+	excluded := make([]string, 0, len(h.operations.busy))
+	for id := range h.operations.busy {
+		excluded = append(excluded, id)
+	}
+	expired := h.manager.ClaimExpired(now, excluded...)
+	if h.operations.busy == nil {
+		h.operations.busy = make(map[string]bool)
+	}
+	for _, info := range expired {
+		h.operations.busy[info.RuntimeSessionID] = true
+	}
+	h.operations.mu.Unlock()
 	for _, info := range expired {
 		runtimeSessionID := info.RuntimeSessionID
 		if h.browser != nil {
@@ -1018,6 +1098,9 @@ func (h *SessionController) ReapExpiredSessions(now time.Time) int {
 		if err := h.manager.Delete(runtimeSessionID); err != nil && !errors.Is(err, session.ErrSessionNotFound) {
 			slog.Warn("delete expired browserd session failed", "runtime_session_id", runtimeSessionID, "error", err)
 		}
+	}
+	for _, info := range expired {
+		h.operations.releaseFunc(info.RuntimeSessionID)()
 	}
 	return len(expired)
 }

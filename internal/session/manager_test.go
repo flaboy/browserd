@@ -393,3 +393,21 @@ func TestMemoryStore_PutOverwritesWithoutIfMatch(t *testing.T) {
 		t.Fatalf("expected overwritten profile, found=%v body=%q", found, string(got))
 	}
 }
+
+func TestManagerClaimExpiredExcludesExecutingSession(t *testing.T) {
+	now := time.Now()
+	m := NewManager(ManagerOptions{Store: profile.NewMemoryStore(), Workdir: t.TempDir(), Now: func() time.Time { return now }})
+	out, err := m.Create(CreateInput{ProfilePath: "/accounts/test/browser/profile.tgz", TTLSeconds: 60, Fingerprint: testFingerprintConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ClaimExpired(now.Add(time.Minute*2), out.RuntimeSessionID); len(got) != 0 {
+		t.Fatal("claimed executing session")
+	}
+	if _, err = m.Get(out.RuntimeSessionID); err != nil {
+		t.Fatal("excluded session marked closing")
+	}
+	if got := m.ClaimExpired(now.Add(time.Minute * 2)); len(got) != 1 {
+		t.Fatal("released session not claimable")
+	}
+}

@@ -185,9 +185,21 @@ func (f *fakeSessionManager) Touch(runtimeSessionID string) error {
 	return nil
 }
 
-func (f *fakeSessionManager) ClaimExpired(now time.Time) []session.SessionInfo {
+func (f *fakeSessionManager) ClaimExpired(now time.Time, excluded ...string) []session.SessionInfo {
 	f.claimCalls = append(f.claimCalls, now)
-	return append([]session.SessionInfo(nil), f.claimExpired...)
+	var out []session.SessionInfo
+	for _, info := range f.claimExpired {
+		skip := false
+		for _, id := range excluded {
+			if id == info.RuntimeSessionID {
+				skip = true
+			}
+		}
+		if !skip {
+			out = append(out, info)
+		}
+	}
+	return out
 }
 
 func TestAct_TouchesSessionBeforeBrowserUse(t *testing.T) {
@@ -1884,5 +1896,58 @@ func TestNavigateIncludeSnapshotContract(t *testing.T) {
 		} else if rr.Code != 400 || len(runtime.navigateCalls) != 1 {
 			t.Fatal("invalid wait reached browser")
 		}
+	}
+}
+
+type blockedNavigationRuntime struct {
+	fakeBrowserRuntime
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockedNavigationRuntime) Navigate(ctx context.Context, id string, in browser.NavigateInput) (browser.NavigateOutput, error) {
+	close(b.started)
+	select {
+	case <-b.release:
+		return browser.NavigateOutput{URL: in.URL}, nil
+	case <-ctx.Done():
+		return browser.NavigateOutput{}, ctx.Err()
+	}
+}
+
+func TestSessionOperationGuardRejectsInterleaving(t *testing.T) {
+	b := &blockedNavigationRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	m := &fakeSessionManager{claimExpired: []session.SessionInfo{{RuntimeSessionID: "one"}, {RuntimeSessionID: "expired"}}}
+	h := controller.NewSessionController(m, b, "")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.Navigate(httptest.NewRecorder(), httptest.NewRequest("POST", "/", strings.NewReader(`{"url":"https://example.com/"}`)), "one")
+	}()
+	<-b.started
+	for _, call := range []func(http.ResponseWriter, *http.Request, string){h.Snapshot, h.Act, h.Evaluate, h.PageTool, h.WaitFor, h.Screenshot, h.UploadFiles, h.CommitSession, h.DeleteSession, h.StartHandoff} {
+		rr := httptest.NewRecorder()
+		call(rr, httptest.NewRequest("POST", "/", strings.NewReader(`{}`)), "one")
+		if rr.Code != 409 || !strings.Contains(rr.Body.String(), "SESSION_BUSY") {
+			t.Errorf("interleaving: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+	if n := h.ReapExpiredSessions(time.Now()); n != 1 {
+		t.Errorf("reaped %d, want only other expired session", n)
+	}
+	for _, id := range b.closeCalls {
+		if id == "one" {
+			t.Error("closed active navigation")
+		}
+	}
+	close(b.release)
+	<-done
+	if n := h.ReapExpiredSessions(time.Now()); n != 2 {
+		t.Errorf("released session was not claimable: %d", n)
+	}
+	rr := httptest.NewRecorder()
+	h.Snapshot(rr, httptest.NewRequest("GET", "/", nil), "one")
+	if rr.Code != 200 {
+		t.Fatalf("guard leaked: %s", rr.Body.String())
 	}
 }

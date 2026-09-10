@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -77,7 +78,7 @@ type Manager interface {
 	Delete(runtimeSessionID string) error
 	Get(runtimeSessionID string) (SessionInfo, error)
 	Touch(runtimeSessionID string) error
-	ClaimExpired(now time.Time) []SessionInfo
+	ClaimExpired(now time.Time, excluded ...string) []SessionInfo
 }
 
 type ManagerOptions struct {
@@ -311,14 +312,14 @@ func (m *manager) Touch(runtimeSessionID string) error {
 	return nil
 }
 
-func (m *manager) ClaimExpired(now time.Time) []SessionInfo {
+func (m *manager) ClaimExpired(now time.Time, excluded ...string) []SessionInfo {
 	now = now.UTC()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	expired := []SessionInfo{}
 	for id, s := range m.sessions {
-		if s.Closing || now.Before(s.ExpiresAt) {
+		if slices.Contains(excluded, id) || s.Closing || now.Before(s.ExpiresAt) {
 			continue
 		}
 		s.Closing = true
