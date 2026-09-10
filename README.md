@@ -230,3 +230,38 @@ Content-Type: application/json
 - `ref` 和 `fullPage` 已不再支持；需要元素截图时使用 `mode=selector` 与 `selector`
 - `screenshotS3Prefix` 必填，且只能是以 `/` 开头、以 `/` 结尾的逻辑路径；不得传 `s3://`、`file://`、`http://` 等协议型路径
 - browserd 使用 `BROWSERD_PROFILE_BUCKET` 指定的 bucket 上传截图，返回 `screenshotId` 为 `<uuid>.png`，返回 `s3Path` 为逻辑路径
+
+### Navigation with a snapshot
+
+Set `includeSnapshot: true` on `POST /v1/sessions/{runtimeSessionId}/navigate`
+with `waitUntil: "load"` (or omit waitUntil). The response includes
+`snapshot: {snapshotId, page}`; page URL/title are also the navigation result's
+URL/title. The returned refs are already registered and can be used immediately.
+`snapshotCleared: true` means the **previous** snapshot state was cleared, not
+that the newly returned snapshot is absent. Omit includeSnapshot to keep the
+navigation-only response. Other waitUntil modes are not implemented by this
+runtime; combined navigation explicitly rejects them instead of pretending to
+honor them.
+
+Navigation and snapshot extraction share timeoutMs (default runtime budget:
+20 seconds), and request cancellation cancels the combined operation. A load
+event is not proof of complete application data: inspect the observation and,
+when needed, explicitly wait for an observed page condition before taking a new
+snapshot. For example use `condition: {type: "element_visible", selector: "#buy"}`.
+There is no fixed sleep or implicit second snapshot request.
+
+Snapshot extraction failure returns `502 SNAPSHOT_FAILED`, with no valid
+snapshot; navigation may already have happened. Old snapshot state is not
+restored. Conflicting same-session HTTP operations return `409 SESSION_BUSY`
+without executing, including handoff and deletion. Different sessions remain
+independent; passive live-view streams do not hold the request guard.
+
+Real-browser regression (start native browserd with Chromium; no Docker needed):
+
+```bash
+BROWSERD_BASE_URL=http://127.0.0.1:7011 go test ./e2e -run '^TestNavigateSnapshotE2E' -count=1 -v
+```
+
+The deterministic test site is served by the test process and must be reachable
+from browserd (this command assumes they run on the same machine). A missing
+BROWSERD_BASE_URL is reported as NOT EXECUTED / SKIP, never as browser validation.
