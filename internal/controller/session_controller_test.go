@@ -2,6 +2,7 @@ package controller_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,7 +88,7 @@ func (f *fakeBrowserRuntime) Close(runtimeSessionID string) error {
 	return nil
 }
 
-func (f *fakeBrowserRuntime) Navigate(_ string, input browser.NavigateInput) (browser.NavigateOutput, error) {
+func (f *fakeBrowserRuntime) Navigate(_ context.Context, _ string, input browser.NavigateInput) (browser.NavigateOutput, error) {
 	f.navigateCalls = append(f.navigateCalls, input)
 	return f.navigateOut, f.navigateErr
 }
@@ -1864,4 +1865,24 @@ func decodeData(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
 		t.Fatalf("missing data: %+v", body)
 	}
 	return data
+}
+
+func TestNavigateIncludeSnapshotContract(t *testing.T) {
+	runtime := &fakeBrowserRuntime{navigateOut: browser.NavigateOutput{URL: "https://example.com/", Snapshot: &browser.SnapshotOutput{SnapshotID: "s", Page: browser.PageSnapshot{URL: "https://example.com/", Groups: map[string]browser.PageTable{}}}}}
+	handler := controller.NewSessionController(&fakeSessionManager{}, runtime, "")
+	for _, wait := range []string{"load", "networkidle"} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/sessions/rt/navigate", strings.NewReader(`{"url":"https://example.com/","includeSnapshot":true,"waitUntil":"`+wait+`"}`))
+		handler.Navigate(rr, req, "rt")
+		if wait == "load" {
+			if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"snapshotId":"s"`) {
+				t.Fatalf("missing snapshot: %s", rr.Body.String())
+			}
+			if !runtime.navigateCalls[0].IncludeSnapshot {
+				t.Fatal("flag not forwarded")
+			}
+		} else if rr.Code != 400 || len(runtime.navigateCalls) != 1 {
+			t.Fatal("invalid wait reached browser")
+		}
+	}
 }

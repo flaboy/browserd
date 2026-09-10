@@ -40,6 +40,7 @@ import (
 var (
 	ErrInvalidRequest          = errors.New("invalid request")
 	ErrInvalidKey              = errors.New("invalid key")
+	ErrSnapshotFailed          = errors.New("snapshot failed")
 	ErrNavigationFailed        = errors.New("navigation failed")
 	ErrActionFailed            = errors.New("action failed")
 	ErrEvaluateFailed          = errors.New("evaluate failed")
@@ -65,6 +66,7 @@ func chromedpErrorLogger(logf func(string, ...any)) func(string, ...any) {
 }
 
 type NavigateInput struct {
+	IncludeSnapshot           bool
 	URL                       string
 	WaitUntil                 string
 	TimeoutMs                 int
@@ -72,9 +74,10 @@ type NavigateInput struct {
 }
 
 type NavigateOutput struct {
-	URL             string `json:"url"`
-	Title           string `json:"title,omitempty"`
-	SnapshotCleared bool   `json:"snapshotCleared"`
+	Snapshot        *SnapshotOutput `json:"snapshot,omitempty"`
+	URL             string          `json:"url"`
+	Title           string          `json:"title,omitempty"`
+	SnapshotCleared bool            `json:"snapshotCleared"`
 }
 
 type SnapshotInput struct {
@@ -215,11 +218,13 @@ type WaitForOutput struct {
 }
 
 type Service struct {
-	sessions    session.Manager
-	state       *browserrt.State
-	assets      assets.Store
-	assetBucket string
-	proxyHop    ProxyHopOptions
+	navigatePage    func(context.Context, string) (NavigateOutput, error)
+	captureSnapshot func(context.Context) (snapshotRuntimeEnvelope, error)
+	sessions        session.Manager
+	state           *browserrt.State
+	assets          assets.Store
+	assetBucket     string
+	proxyHop        ProxyHopOptions
 
 	capturePNG         func(context.Context) ([]byte, error)
 	setFileInputFiles  func(runtimeSessionID string, selector string, filePaths []string, timeoutMs int) error
@@ -296,6 +301,8 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		assetBucket:        strings.TrimSpace(opts.AssetBucket),
 		proxyHop:           opts.ProxyHop,
 		capturePNG:         capturePagePNG,
+		navigatePage:       navigatePage,
+		captureSnapshot:    captureSnapshotEnvelope,
 		browsers:           map[string]*activeBrowser{},
 		pointers:           map[string]pointerState{},
 		pointerSubscribers: map[string]map[chan VirtualPointerSnapshot]struct{}{},
@@ -432,35 +439,55 @@ func (s *Service) LiveProxyTarget(runtimeSessionID string) (string, error) {
 	return b.live.ProxyTarget(), nil
 }
 
-func (s *Service) Navigate(runtimeSessionID string, input NavigateInput) (NavigateOutput, error) {
-	if strings.TrimSpace(input.URL) == "" {
+// Navigate optionally captures a fresh observation under the navigation deadline.
+func (s *Service) Navigate(parent context.Context, runtimeSessionID string, input NavigateInput) (NavigateOutput, error) {
+	if strings.TrimSpace(input.URL) == "" || (input.IncludeSnapshot && input.WaitUntil != "" && input.WaitUntil != "load") {
 		return NavigateOutput{}, ErrInvalidRequest
+	}
+	if err := parent.Err(); err != nil {
+		return NavigateOutput{}, err
 	}
 	ctx, cancel, err := s.newBrowserContext(runtimeSessionID, input.TimeoutMs)
 	if err != nil {
 		return NavigateOutput{}, err
 	}
 	defer cancel()
-
-	var title string
-	var url string
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(input.URL),
-		chromedp.Title(&title),
-		chromedp.Location(&url),
-	); err != nil {
-		return NavigateOutput{}, fmt.Errorf("%w: %v", ErrNavigationFailed, err)
+	if deadline, ok := parent.Deadline(); ok {
+		var deadlineCancel context.CancelFunc
+		ctx, deadlineCancel = context.WithDeadline(ctx, deadline)
+		defer deadlineCancel()
 	}
-	if err := s.uploadAfterNavigate(ctx, input.AfterLoadScreenshotS3Path); err != nil {
-		return NavigateOutput{}, fmt.Errorf("%w: %v", ErrScreenshotFailed, err)
-	}
+	stop := context.AfterFunc(parent, cancel)
+	defer stop()
+	return s.navigateWithContext(ctx, runtimeSessionID, input)
+}
 
-	s.state.ClearSnapshot(runtimeSessionID)
-	return NavigateOutput{
-		URL:             url,
-		Title:           title,
-		SnapshotCleared: true,
-	}, nil
+func navigatePage(ctx context.Context, rawURL string) (NavigateOutput, error) {
+	var out NavigateOutput
+	err := chromedp.Run(ctx, chromedp.Navigate(rawURL), chromedp.Title(&out.Title), chromedp.Location(&out.URL))
+	return out, err
+}
+
+func (s *Service) navigateWithContext(ctx context.Context, id string, input NavigateInput) (NavigateOutput, error) {
+	s.state.ClearSnapshot(id)
+	out, err := s.navigatePage(ctx, input.URL)
+	if err != nil {
+		return NavigateOutput{}, fmt.Errorf("%w: %w", ErrNavigationFailed, err)
+	}
+	if err = s.uploadAfterNavigate(ctx, input.AfterLoadScreenshotS3Path); err != nil {
+		return NavigateOutput{}, fmt.Errorf("%w: %w", ErrScreenshotFailed, err)
+	}
+	out.SnapshotCleared = true
+	if input.IncludeSnapshot {
+		snapshot, err := s.snapshotWithContext(ctx, id)
+		if err != nil {
+			return NavigateOutput{}, fmt.Errorf("%w: navigation may have completed; no valid snapshot: %w", ErrSnapshotFailed, err)
+		}
+		out.Snapshot = &snapshot
+		out.URL = snapshot.Page.URL
+		out.Title = snapshot.Page.Title
+	}
+	return out, nil
 }
 
 func (s *Service) uploadAfterNavigate(ctx context.Context, s3Path string) error {
@@ -496,11 +523,26 @@ func (s *Service) Snapshot(runtimeSessionID string, input SnapshotInput) (Snapsh
 	}
 	defer cancel()
 
+	return s.snapshotWithContext(ctx, runtimeSessionID)
+}
+
+func captureSnapshotEnvelope(ctx context.Context) (snapshotRuntimeEnvelope, error) {
 	var envelope snapshotRuntimeEnvelope
-	if err := chromedp.Run(ctx,
-		chromedp.Evaluate(browserSnapshotRuntimeScript, &envelope),
-	); err != nil {
-		return SnapshotOutput{}, fmt.Errorf("%w: %v", ErrActionFailed, err)
+	err := chromedp.Run(ctx, chromedp.Evaluate(browserSnapshotRuntimeScript, &envelope))
+	return envelope, err
+}
+
+func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID string) (SnapshotOutput, error) {
+	envelope, err := s.captureSnapshot(ctx)
+	if err != nil {
+		return SnapshotOutput{}, fmt.Errorf("%w: %w", ErrSnapshotFailed, err)
+	}
+	if err = ctx.Err(); err != nil {
+		return SnapshotOutput{}, err
+	}
+	parsed, err := url.Parse(envelope.Page.URL)
+	if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return SnapshotOutput{}, fmt.Errorf("%w: invalid observed page URL", ErrSnapshotFailed)
 	}
 
 	snapshotID := fmt.Sprintf("snap_%d", time.Now().UnixNano())

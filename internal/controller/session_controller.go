@@ -43,7 +43,7 @@ type browserRuntime interface {
 	PrepareSession(runtimeSessionID string) error
 	Checkpoint(runtimeSessionID string) error
 	Close(runtimeSessionID string) error
-	Navigate(runtimeSessionID string, input browser.NavigateInput) (browser.NavigateOutput, error)
+	Navigate(ctx context.Context, runtimeSessionID string, input browser.NavigateInput) (browser.NavigateOutput, error)
 	Snapshot(runtimeSessionID string, input browser.SnapshotInput) (browser.SnapshotOutput, error)
 	Act(runtimeSessionID string, input browser.ActInput) (browser.ActOutput, error)
 	WaitFor(runtimeSessionID string, input browser.WaitForInput) (browser.WaitForOutput, error)
@@ -131,6 +131,7 @@ type commitSessionRequest struct {
 }
 
 type navigateRequest struct {
+	IncludeSnapshot           bool   `json:"includeSnapshot"`
 	URL                       string `json:"url"`
 	WaitUntil                 string `json:"waitUntil,omitempty"`
 	TimeoutMs                 int    `json:"timeoutMs,omitempty"`
@@ -341,6 +342,10 @@ func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, run
 		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid json body")
 		return
 	}
+	if req.IncludeSnapshot && req.WaitUntil != "" && req.WaitUntil != "load" {
+		types.WriteErr(w, http.StatusBadRequest, "INVALID_REQUEST", "navigation with snapshot supports waitUntil=load only")
+		return
+	}
 	if !h.touchSession(w, runtimeSessionID) {
 		return
 	}
@@ -348,7 +353,8 @@ func (h *SessionController) Navigate(w http.ResponseWriter, r *http.Request, run
 		types.WriteErr(w, http.StatusConflict, "HANDOFF_ACTIVE", "browser session is under human handoff")
 		return
 	}
-	out, err := h.browser.Navigate(runtimeSessionID, browser.NavigateInput{
+	out, err := h.browser.Navigate(r.Context(), runtimeSessionID, browser.NavigateInput{
+		IncludeSnapshot:           req.IncludeSnapshot,
 		URL:                       req.URL,
 		WaitUntil:                 req.WaitUntil,
 		TimeoutMs:                 req.TimeoutMs,
@@ -845,6 +851,8 @@ func writeBrowserErr(w http.ResponseWriter, err error) {
 		types.WriteErr(w, http.StatusNotImplemented, "PLAYWRIGHT_NOT_AVAILABLE", err.Error())
 	case errors.Is(err, browser.ErrLiveRuntimeUnhealthy):
 		types.WriteErr(w, http.StatusServiceUnavailable, "LIVE_RUNTIME_UNHEALTHY", err.Error())
+	case errors.Is(err, browser.ErrSnapshotFailed):
+		types.WriteErr(w, http.StatusBadGateway, "SNAPSHOT_FAILED", err.Error())
 	case errors.Is(err, browser.ErrNavigationFailed):
 		types.WriteErr(w, http.StatusBadGateway, "NAVIGATION_FAILED", err.Error())
 	case errors.Is(err, browser.ErrActionFailed):
