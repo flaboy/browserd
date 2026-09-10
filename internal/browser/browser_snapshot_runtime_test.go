@@ -17,6 +17,18 @@ func TestBrowserSnapshotRuntimeComesFromPackage(t *testing.T) {
 	}
 }
 
+func TestBrowserSnapshotRuntimeExposesLinkImages(t *testing.T) {
+	for _, marker := range []string{
+		"['ref', 'tag', 'text', 'href', 'image_url']",
+		"img.currentSrc || img.src",
+		"imageURL: imageOf(el)",
+	} {
+		if !strings.Contains(browserSnapshotRuntimeScript, marker) {
+			t.Fatalf("snapshot must preserve observed link images: missing %q", marker)
+		}
+	}
+}
+
 func TestBrowserSnapshotRuntimeExposesHiddenFileInputs(t *testing.T) {
 	for _, marker := range []string{
 		"tag === 'input' && type === 'file'",

@@ -233,6 +233,13 @@ Content-Type: application/json
 
 ### Navigation with a snapshot
 
+Link tables include `image_url` from the link's own descendant image, including
+image-only links. Full resource URLs and hrefs are preserved. Separate image
+and title links can be joined by their exact observed href. Missing sources
+remain empty; browserd does not infer product identity or image addresses.
+The embedded runtime is generated from the pinned shared `browser-snapshot`
+revision with `bash internal/browser/generate_browser_snapshot_runtime.sh`.
+
 Set `includeSnapshot: true` on `POST /v1/sessions/{runtimeSessionId}/navigate`
 with `waitUntil: "load"` (or omit waitUntil). The response includes
 `snapshot: {snapshotId, page}`; page URL/title are also the navigation result's

@@ -1,5 +1,6 @@
 package browser
 
+// Generated from browser-snapshot f750efabab49d571e8dc13a2fc966719f1ee9745; DO NOT EDIT.
 const browserSnapshotRuntimeScript = `(() => {
   const captureSnapshotRows = function captureSnapshotRows() {
     const normalize = (value, max = 200) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -55,12 +56,12 @@ const browserSnapshotRuntimeScript = `(() => {
             return 'inputs';
         if (tag === 'textarea')
             return 'textareas';
-        if (el.isContentEditable || normalize(el.getAttribute('role'), 40) === 'textbox')
-            return 'inputs';
         if (tag === 'select')
             return 'selects';
         if (tag === 'area')
             return 'areas';
+        if (el.isContentEditable || normalize(el.getAttribute('role'), 40) === 'textbox')
+            return 'inputs';
         const role = normalize(el.getAttribute('role'), 40);
         if (role)
             return 'customs';
@@ -68,6 +69,22 @@ const browserSnapshotRuntimeScript = `(() => {
     };
     const actionableSeen = new Set();
     const out = [];
+    // Only associate images contained by this link; consumers can join identical hrefs.
+    const imageOf = (el) => {
+        if (el.tagName.toLowerCase() !== 'a')
+            return '';
+        for (const img of Array.from(el.querySelectorAll('img'))) {
+            const rect = img.getBoundingClientRect();
+            const style = window.getComputedStyle(img);
+            // Lazy images may already have a real source before their opacity transition.
+            if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
+                continue;
+            const source = (img.currentSrc || img.src || '').trim();
+            if (/^https?:\/\//i.test(source))
+                return source;
+        }
+        return '';
+    };
     const actionableNodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,area,summary,[role],[tabindex],[contenteditable="true"]'));
     for (const el of actionableNodes) {
         const tag = el.tagName.toLowerCase();
@@ -88,9 +105,10 @@ const browserSnapshotRuntimeScript = `(() => {
             name: nameOf(el),
             text: textOf(el),
             tagName: el.tagName.toLowerCase(),
+            href: (el.getAttribute('href') || '').trim(),
+            imageURL: imageOf(el),
             type,
             accept: normalize(el.getAttribute('accept') || '', 200),
-            href: normalize(el.getAttribute('href') || '', 200),
             value: normalize(el.value || '', 200),
             placeholder: normalize(el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '', 120),
             textLength: textOf(el).length
@@ -208,14 +226,14 @@ const browserSnapshotRuntimeScript = `(() => {
         const tagName = row.tagName.toUpperCase();
         switch (group) {
             case 'links':
-                addRow(group, ['ref', 'tag', 'text', 'href'], [ref, tagName, row.text, row.href]);
+                addRow(group, ['ref', 'tag', 'text', 'href', 'image_url'], [ref, tagName, row.text, row.href, row.imageURL || '']);
                 break;
             case 'buttons':
                 addRow(group, ['ref', 'tag', 'text'], [ref, tagName, row.text]);
                 break;
             case 'inputs':
             case 'textareas':
-                addRow(group, ['ref', 'tag', 'type', 'accept', 'value', 'placeholder'], [ref, tagName, row.type, row.accept, row.value, row.placeholder]);
+                addRow(group, ['ref', 'tag', 'type', 'accept', 'value', 'placeholder'], [ref, tagName, row.type || '', row.accept || '', row.value, row.placeholder]);
                 break;
             case 'selects':
                 addRow(group, ['ref', 'tag', 'value'], [ref, tagName, row.value]);
