@@ -18,6 +18,15 @@ func TestNavigateSnapshotE2E(t *testing.T) {
 	}
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/network":
+			fmt.Fprint(w, `<body>Live catalog $25<script>fetch('/stream')</script></body>`)
+		case "/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: connected\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		case "/broken":
+			fmt.Fprint(w, `<body>Extraction failure<script>document.querySelectorAll = () => {throw new Error('forced extraction failure')}</script></body>`)
 		case "/redirect":
 			http.Redirect(w, r, "/catalog", http.StatusFound)
 		case "/slow":
@@ -69,7 +78,19 @@ func TestNavigateSnapshotE2E(t *testing.T) {
 			t.Fatalf("returned ref cannot act: %d %+v", status, act)
 		}
 	}
-	status, out := mustDoJSON(t, "POST", session+"/navigate", map[string]any{"url": site.URL + "/async", "includeSnapshot": true})
+	status, out := mustDoJSON(t, "POST", session+"/navigate", map[string]any{"url": site.URL + "/network", "includeSnapshot": true, "timeoutMs": 3000})
+	if status != 200 || out.Data["snapshot"] == nil {
+		t.Fatalf("continuous background network blocked load observation: %d %+v", status, out)
+	}
+	status, out = mustDoJSON(t, "POST", session+"/navigate", map[string]any{"url": site.URL + "/broken", "includeSnapshot": true, "timeoutMs": 3000})
+	if status != 502 || out.Data != nil || out.Error["code"] != "SNAPSHOT_FAILED" {
+		t.Fatalf("extraction failure not distinguished: %d %+v", status, out)
+	}
+	status, out = mustDoJSON(t, "POST", session+"/act", map[string]any{"action": "click", "ref": "e1"})
+	if status == 200 {
+		t.Fatal("failed observation retained actionable stale refs")
+	}
+	status, out = mustDoJSON(t, "POST", session+"/navigate", map[string]any{"url": site.URL + "/async", "includeSnapshot": true})
 	if status != 200 || out.Data["snapshot"] == nil {
 		t.Fatalf("async navigation failed: %+v", out)
 	}
