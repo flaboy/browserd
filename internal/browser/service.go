@@ -98,9 +98,15 @@ type PageTable struct {
 }
 
 type PageSnapshot struct {
-	URL    string               `json:"url,omitempty"`
-	Title  string               `json:"title,omitempty"`
-	Groups map[string]PageTable `json:"groups"`
+	URL           string               `json:"url,omitempty"`
+	Title         string               `json:"title,omitempty"`
+	FormatVersion int                  `json:"formatVersion,omitempty"`
+	Tree          json.RawMessage      `json:"tree,omitempty"`
+	Capture       json.RawMessage      `json:"capture,omitempty"`
+	Encoding      string               `json:"encoding,omitempty"`
+	Attributes    json.RawMessage      `json:"attributes,omitempty"`
+	States        json.RawMessage      `json:"states,omitempty"`
+	Groups        map[string]PageTable `json:"groups,omitempty"`
 }
 
 type SnapshotOutput struct {
@@ -547,8 +553,26 @@ func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID stri
 
 	snapshotID := fmt.Sprintf("snap_%d", time.Now().UnixNano())
 	page := envelope.Page
-	if page.Groups == nil {
-		page.Groups = map[string]PageTable{}
+	switch page.FormatVersion {
+	case 0, 1:
+		if len(page.Tree) != 0 || len(page.Capture) != 0 {
+			return SnapshotOutput{}, fmt.Errorf("%w: tree requires snapshot formatVersion 2", ErrSnapshotFailed)
+		}
+	case 2:
+		if page.Groups != nil || !jsonObject(page.Tree) || !jsonObject(page.Capture) {
+			return SnapshotOutput{}, fmt.Errorf("%w: invalid tree snapshot envelope", ErrSnapshotFailed)
+		}
+	case 3:
+		raw, marshalErr := json.Marshal(page)
+		var publicPage browserdclient.PageSnapshot
+		if marshalErr != nil || json.Unmarshal(raw, &publicPage) != nil {
+			return SnapshotOutput{}, fmt.Errorf("%w: invalid compact page", ErrSnapshotFailed)
+		}
+		if _, decodeErr := browserdclient.DecodeSnapshotPage(publicPage); decodeErr != nil {
+			return SnapshotOutput{}, fmt.Errorf("%w: %v", ErrSnapshotFailed, decodeErr)
+		}
+	default:
+		return SnapshotOutput{}, fmt.Errorf("%w: unsupported snapshot formatVersion %d", ErrSnapshotFailed, page.FormatVersion)
 	}
 	refs := envelope.Refs
 	if refs == nil {
@@ -565,9 +589,15 @@ func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID stri
 	s.state.ReplaceSnapshot(runtimeSessionID, browserrt.SnapshotState{
 		SnapshotID: snapshotID,
 		Page: browserrt.PageState{
-			URL:    page.URL,
-			Title:  page.Title,
-			Groups: pageGroupsToState(page.Groups),
+			URL:           page.URL,
+			Title:         page.Title,
+			Groups:        pageGroupsToState(page.Groups),
+			FormatVersion: page.FormatVersion,
+			Tree:          page.Tree,
+			Capture:       page.Capture,
+			Encoding:      page.Encoding,
+			Attributes:    page.Attributes,
+			States:        page.States,
 		},
 		Refs: refs,
 	})
@@ -576,6 +606,11 @@ func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID stri
 		SnapshotID: snapshotID,
 		Page:       page,
 	}, nil
+}
+
+func jsonObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
 func (s *Service) Act(runtimeSessionID string, input ActInput) (ActOutput, error) {

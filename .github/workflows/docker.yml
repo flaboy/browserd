@@ -15,7 +15,50 @@ env:
   IMAGE_NAME: ghcr.io/flaboy/browserd
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify pinned snapshot runtime
+        run: |
+          bash internal/browser/generate_browser_snapshot_runtime.sh
+          git diff --exit-code -- internal/browser/browser_snapshot_runtime.go
+      - name: Go tests
+        run: go test -race ./...
+      - name: Native Chrome snapshot and action regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CHROME_BIN="$(command -v google-chrome)"
+          export BROWSERD_PORT=7021 BROWSERD_BASE_URL=http://127.0.0.1:7021
+          export BROWSERD_PROFILE_STORE=file BROWSERD_PROFILE_FILE_ROOT="$RUNNER_TEMP/profiles"
+          export BROWSERD_WORKDIR="$RUNNER_TEMP/browserd-work"
+          go build -o "$RUNNER_TEMP/browserd" ./cmd/browserd
+          "$RUNNER_TEMP/browserd" > "$RUNNER_TEMP/browserd.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
+          for attempt in {1..50}; do
+            if curl --fail --silent "$BROWSERD_BASE_URL/healthz" > /dev/null; then break; fi
+            sleep 0.2
+          done
+          go test ./e2e -run 'TestNavigateSnapshotE2E|TestSnapshotDOMTreeE2E' -count=1 -v
+      - name: Retain browser test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-browser-test
+          path: ${{ runner.temp }}/browserd.log
+
   docker:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

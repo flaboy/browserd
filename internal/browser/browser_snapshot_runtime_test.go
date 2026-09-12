@@ -19,9 +19,9 @@ func TestBrowserSnapshotRuntimeComesFromPackage(t *testing.T) {
 
 func TestBrowserSnapshotRuntimeExposesLinkImages(t *testing.T) {
 	for _, marker := range []string{
-		"['ref', 'tag', 'text', 'href', 'image_url']",
+		"formatVersion: 2",
 		"img.currentSrc || img.src",
-		"imageURL: imageOf(el)",
+		"attrs.src",
 	} {
 		if !strings.Contains(browserSnapshotRuntimeScript, marker) {
 			t.Fatalf("snapshot must preserve observed link images: missing %q", marker)
@@ -32,8 +32,8 @@ func TestBrowserSnapshotRuntimeExposesLinkImages(t *testing.T) {
 func TestBrowserSnapshotRuntimeExposesHiddenFileInputs(t *testing.T) {
 	for _, marker := range []string{
 		"tag === 'input' && type === 'file'",
-		"accept: normalize(el.getAttribute('accept') || '', 200)",
-		"['ref', 'tag', 'type', 'accept', 'value', 'placeholder']",
+		"File inputs remain addressable",
+		"accept|placeholder",
 	} {
 		if !strings.Contains(browserSnapshotRuntimeScript, marker) {
 			t.Fatalf("snapshot runtime must expose hidden file inputs with marker %q", marker)
@@ -43,7 +43,7 @@ func TestBrowserSnapshotRuntimeExposesHiddenFileInputs(t *testing.T) {
 
 func TestBrowserSnapshotRuntimeExposesContentEditableInputs(t *testing.T) {
 	for _, marker := range []string{
-		"[contenteditable=\"true\"]",
+		"state.editable = true",
 		"el.isContentEditable",
 		"el.getAttribute('data-placeholder')",
 	} {

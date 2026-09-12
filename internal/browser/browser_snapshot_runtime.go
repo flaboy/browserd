@@ -1,263 +1,176 @@
 package browser
 
-// Generated from browser-snapshot f750efabab49d571e8dc13a2fc966719f1ee9745; DO NOT EDIT.
+// Generated from browser-snapshot 3f0544fa1f0cba8dd053cd0414b8704f22de8128; DO NOT EDIT.
 const browserSnapshotRuntimeScript = `(() => {
-  const captureSnapshotRows = function captureSnapshotRows() {
-    const normalize = (value, max = 200) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
-    const isVisible = (el) => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return (style.display !== 'none' &&
-            style.visibility !== 'hidden' &&
-            style.opacity !== '0' &&
-            rect.width > 0 &&
-            rect.height > 0);
-    };
-    const isEnabled = (el) => !el.hasAttribute('disabled') && el.getAttribute('aria-disabled') !== 'true';
-    const cssPath = (el) => {
-        const parts = [];
-        let current = el;
-        while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 8) {
-            let selector = current.tagName.toLowerCase();
-            if (current.id) {
-                selector += ` + "`" + `#${CSS.escape(current.id)}` + "`" + `;
-                parts.unshift(selector);
-                break;
-            }
-            let nth = 1;
-            let sib = current.previousElementSibling;
-            while (sib) {
-                if (sib.tagName === current.tagName)
-                    nth += 1;
-                sib = sib.previousElementSibling;
-            }
-            selector += ` + "`" + `:nth-of-type(${nth})` + "`" + `;
-            parts.unshift(selector);
-            current = current.parentElement;
-        }
-        return parts.join(' > ');
-    };
-    const roleOf = (el) => normalize(el.getAttribute('role') || el.tagName.toLowerCase(), 80);
-    const textOf = (el) => normalize(el.innerText || el.textContent || '', 200);
-    const nameOf = (el) => normalize(el.getAttribute('aria-label') ||
-        el.getAttribute('placeholder') ||
-        el.getAttribute('data-placeholder') ||
-        el.getAttribute('title') ||
-        el.innerText ||
-        el.value ||
-        '', 120);
-    const groupOf = (el) => {
-        const tag = el.tagName.toLowerCase();
-        if (tag === 'a')
-            return 'links';
-        if (tag === 'button')
-            return 'buttons';
-        if (tag === 'input')
-            return 'inputs';
-        if (tag === 'textarea')
-            return 'textareas';
-        if (tag === 'select')
-            return 'selects';
-        if (tag === 'area')
-            return 'areas';
-        if (el.isContentEditable || normalize(el.getAttribute('role'), 40) === 'textbox')
-            return 'inputs';
-        const role = normalize(el.getAttribute('role'), 40);
-        if (role)
-            return 'customs';
-        return 'customs';
-    };
-    const actionableSeen = new Set();
-    const out = [];
-    // Only associate images contained by this link; consumers can join identical hrefs.
-    const imageOf = (el) => {
-        if (el.tagName.toLowerCase() !== 'a')
-            return '';
-        for (const img of Array.from(el.querySelectorAll('img'))) {
-            const rect = img.getBoundingClientRect();
-            const style = window.getComputedStyle(img);
-            // Lazy images may already have a real source before their opacity transition.
-            if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
-                continue;
-            const source = (img.currentSrc || img.src || '').trim();
-            if (/^https?:\/\//i.test(source))
-                return source;
-        }
-        return '';
-    };
-    const actionableNodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,area,summary,[role],[tabindex],[contenteditable="true"]'));
-    for (const el of actionableNodes) {
-        const tag = el.tagName.toLowerCase();
-        const type = normalize(el.getAttribute('type') || '', 80).toLowerCase();
-        const isFileInput = tag === 'input' && type === 'file';
-        if (!isFileInput && !isVisible(el))
-            continue;
-        if (!isEnabled(el))
-            continue;
-        const selector = cssPath(el);
-        if (!selector || actionableSeen.has(selector))
-            continue;
-        actionableSeen.add(selector);
-        out.push({
-            selector,
-            group: groupOf(el),
-            role: roleOf(el),
-            name: nameOf(el),
-            text: textOf(el),
-            tagName: el.tagName.toLowerCase(),
-            href: (el.getAttribute('href') || '').trim(),
-            imageURL: imageOf(el),
-            type,
-            accept: normalize(el.getAttribute('accept') || '', 200),
-            value: normalize(el.value || '', 200),
-            placeholder: normalize(el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '', 120),
-            textLength: textOf(el).length
-        });
-    }
-    const textCandidates = Array.from(document.querySelectorAll('p,h1,h2,h3,h4,h5,h6,article,section,div,span,li,blockquote,pre,code'));
-    const textRows = [];
-    for (const el of textCandidates) {
-        if (!isVisible(el))
-            continue;
-        const selector = cssPath(el);
-        if (!selector)
-            continue;
-        const text = textOf(el);
-        if (text.length < 6)
-            continue;
-        if (el.querySelector('a,button,input,textarea,select,area,[role],[tabindex]'))
-            continue;
-        textRows.push({
-            selector,
-            group: 'texts',
-            role: '',
-            name: '',
-            text,
-            tagName: el.tagName.toLowerCase(),
-            href: '',
-            value: '',
-            placeholder: '',
-            textLength: text.length
-        });
-    }
-    textRows.sort((a, b) => a.selector.length - b.selector.length);
-    const dedupedTexts = [];
-    for (const row of textRows) {
-        let nested = false;
-        for (const kept of dedupedTexts) {
-            if (!row.selector.startsWith(kept.selector))
-                continue;
-            try {
-                const parentEl = document.querySelector(kept.selector);
-                const childEl = document.querySelector(row.selector);
-                if (parentEl && childEl && parentEl !== childEl && parentEl.contains(childEl)) {
-                    nested = true;
-                    break;
-                }
-            }
-            catch {
-            }
-        }
-        if (!nested)
-            dedupedTexts.push(row);
-    }
-    return out.concat(dedupedTexts);
-};
-  const inferGroup = function inferGroup(row) {
-    const explicit = row.group.trim().toLowerCase();
-    if (['links', 'buttons', 'inputs', 'textareas', 'selects', 'areas', 'customs', 'texts'].includes(explicit)) {
-        return explicit;
-    }
-    switch (row.tagName.trim().toLowerCase()) {
-        case 'a':
-            return 'links';
-        case 'button':
-            return 'buttons';
-        case 'input':
-            return 'inputs';
-        case 'textarea':
-            return 'textareas';
-        case 'select':
-            return 'selects';
-        case 'area':
-            return 'areas';
-        default:
-            if (row.role.trim() !== '') {
-                return 'customs';
-            }
-            return 'texts';
-    }
-};
-  const buildPageSnapshot = function buildPageSnapshot(rows, url, title) {
-    const groups = {};
+  const captureSnapshotTree = function captureSnapshotTree(limits = { nodes: 12000, depth: 160, text: 4000 }) {
     const refs = {};
-    let elementIndex = 0;
-    let textIndex = 0;
-    const addRow = (group, columns, values) => {
-        const table = groups[group] ?? { columns: [], rows: [] };
-        if (table.columns.length === 0) {
-            table.columns = columns;
-        }
-        table.rows.push(values);
-        groups[group] = table;
+    const omissions = [];
+    let sequence = 0;
+    let refSequence = 0;
+    let visited = 0;
+    const omit = (nodeId, reason) => {
+        if (!omissions.some(item => item.nodeId === nodeId && item.reason === reason))
+            omissions.push({ nodeId, reason });
     };
-    for (const row of rows) {
-        const group = row.group.trim() || inferGroup(row);
-        let kind = 'element';
-        let ref;
-        if (group === 'texts') {
-            textIndex += 1;
-            ref = ` + "`" + `t${textIndex}` + "`" + `;
-            kind = 'text';
+    const relevant = /^(id|class|role|title|lang|dir|href|src|alt|for|headers|scope|name|type|accept|placeholder|contenteditable|tabindex|colspan|rowspan|aria-.+)$/;
+    const skipped = new Set(['head', 'script', 'style', 'noscript', 'template']);
+    const actionTags = new Set(['a', 'button', 'input', 'textarea', 'select', 'area', 'summary']);
+    const walk = (dom, selector, depth, parentID, hidden, inSelect = false) => {
+        if (++visited > limits.nodes) {
+            omit(parentID, 'node-limit');
+            return null;
         }
-        else {
-            elementIndex += 1;
-            ref = ` + "`" + `e${elementIndex}` + "`" + `;
+        if (depth > limits.depth) {
+            omit(parentID, 'depth-limit');
+            return null;
         }
-        refs[ref] = {
-            ref,
-            kind,
-            role: row.role,
-            name: row.name,
-            tagName: row.tagName,
-            text: row.text,
-            selector: row.selector
-        };
-        const tagName = row.tagName.toUpperCase();
-        switch (group) {
-            case 'links':
-                addRow(group, ['ref', 'tag', 'text', 'href', 'image_url'], [ref, tagName, row.text, row.href, row.imageURL || '']);
-                break;
-            case 'buttons':
-                addRow(group, ['ref', 'tag', 'text'], [ref, tagName, row.text]);
-                break;
-            case 'inputs':
-            case 'textareas':
-                addRow(group, ['ref', 'tag', 'type', 'accept', 'value', 'placeholder'], [ref, tagName, row.type || '', row.accept || '', row.value, row.placeholder]);
-                break;
-            case 'selects':
-                addRow(group, ['ref', 'tag', 'value'], [ref, tagName, row.value]);
-                break;
-            case 'areas':
-                addRow(group, ['ref', 'tag', 'text', 'href'], [ref, tagName, row.text, row.href]);
-                break;
-            case 'customs':
-                addRow(group, ['ref', 'tag', 'role', 'text'], [ref, tagName, row.role, row.text]);
-                break;
-            case 'texts':
-                addRow(group, ['ref', 'tag', 'text', 'textLength'], [ref, tagName, row.text, row.textLength]);
-                break;
+        if (dom.nodeType === 3) {
+            if (hidden || !dom.textContent)
+                return null;
+            const parentStyle = dom.parentElement ? getComputedStyle(dom.parentElement) : null;
+            if (parentStyle?.visibility === 'hidden' || parentStyle?.visibility === 'collapse')
+                return null;
+            const range = document.createRange();
+            range.selectNodeContents(dom);
+            if (!inSelect && !Array.from(range.getClientRects()).some(rect => rect.width > 0 && rect.height > 0))
+                return null;
+            const whiteSpace = parentStyle?.whiteSpace || '';
+            const text = /^(pre|pre-wrap|break-spaces)$/.test(whiteSpace) ? dom.textContent : dom.textContent.replace(/[\t\r\n\f ]+/g, ' ');
+            if (!text)
+                return null;
+            const node = { id: ` + "`" + `n${++sequence}` + "`" + `, tag: '#text', text: text.slice(0, limits.text) };
+            if (text.length > limits.text)
+                omit(node.id, 'text-limit');
+            return node;
         }
-    }
-    return {
-        page: {
-            url,
-            title,
-            groups
-        },
-        refs
+        if (dom.nodeType !== 1)
+            return null;
+        const el = dom;
+        const tag = el.tagName.toLowerCase();
+        if (skipped.has(tag))
+            return null;
+        const style = getComputedStyle(el);
+        const type = (el.getAttribute('type') || '').toLowerCase();
+        const fileInput = tag === 'input' && type === 'file';
+        const displayHidden = hidden || style.display === 'none';
+        // File inputs remain addressable even inside hidden upload widgets.
+        if (displayHidden && !fileInput && !el.querySelector('input[type="file"]'))
+            return null;
+        const invisible = displayHidden || style.visibility === 'hidden' || style.visibility === 'collapse' || (style.opacity === '0' && tag !== 'img');
+        const node = { id: ` + "`" + `n${++sequence}` + "`" + `, tag };
+        const attrs = {};
+        for (const attr of Array.from(el.attributes)) {
+            if (relevant.test(attr.name))
+                attrs[attr.name] = attr.value;
+        }
+        if (tag === 'a' || tag === 'area')
+            attrs.href = el.href || attrs.href || '';
+        if (tag === 'img') {
+            const img = el;
+            attrs.src = img.currentSrc || img.src || attrs.src || '';
+        }
+        if (tag === 'iframe') {
+            attrs.src = el.src || attrs.src || '';
+            omit(node.id, 'frame');
+        }
+        if (el.shadowRoot)
+            omit(node.id, 'shadow-root');
+        if (Object.keys(attrs).length)
+            node.attrs = attrs;
+        const state = {};
+        const disabled = el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('inert');
+        if (disabled)
+            state.disabled = true;
+        if (invisible)
+            state.hidden = true;
+        if (['input', 'textarea', 'select'].includes(tag)) {
+            state.value = type === 'password' ? '' : el.value || '';
+            if (el.hasAttribute('readonly'))
+                state.readOnly = true;
+            if (el.hasAttribute('required'))
+                state.required = true;
+            if (type === 'checkbox' || type === 'radio')
+                state.checked = el.checked;
+            if (tag === 'select')
+                state.selected = Array.from(el.selectedOptions).map(option => option.value);
+        }
+        if (tag === 'option')
+            state.selected = el.selected;
+        if (tag === 'details')
+            state.open = el.open;
+        if (el.isContentEditable) {
+            state.editable = true;
+            const placeholder = el.getAttribute('data-placeholder');
+            if (placeholder && !attrs.placeholder) {
+                attrs.placeholder = placeholder;
+                node.attrs = attrs;
+            }
+        }
+        if (Object.keys(state).length)
+            node.state = state;
+        const rect = el.getBoundingClientRect();
+        const laidOut = rect.width > 0 && rect.height > 0;
+        const actionable = actionTags.has(tag) || el.hasAttribute('role') || el.hasAttribute('tabindex') || el.isContentEditable;
+        if (actionable && !disabled && ((!invisible && laidOut) || fileInput) && type !== 'hidden') {
+            node.ref = ` + "`" + `e${++refSequence}` + "`" + `;
+            refs[node.ref] = { ref: node.ref, kind: 'element', tagName: el.tagName, selector, role: attrs.role || '', name: attrs['aria-label'] || attrs.title || attrs.placeholder || '' };
+        }
+        const children = [];
+        let elementIndex = 0;
+        for (const child of Array.from(dom.childNodes)) {
+            if (visited >= limits.nodes) {
+                omit(node.id, 'node-limit');
+                break;
+            }
+            const childSelector = child.nodeType === 1 ? ` + "`" + `${selector} > :nth-child(${++elementIndex})` + "`" + ` : selector;
+            // Unlike display/opacity, visibility can be overridden by a descendant.
+            const subtreeHidden = displayHidden || (style.opacity === '0' && tag !== 'img');
+            const captured = walk(child, childSelector, depth + 1, node.id, subtreeHidden, inSelect || tag === 'select');
+            if (captured)
+                children.push(captured);
+        }
+        if (children.length)
+            node.children = children;
+        const boundary = omissions.some(item => item.nodeId === node.id);
+        if (!children.length && !node.ref && !node.attrs && !node.state && !boundary && tag !== 'html' && tag !== 'body' && tag !== 'br')
+            return null;
+        // Only attribute-free neutral unary wrappers are lossless to compress.
+        if ((tag === 'div' || tag === 'span') && el.attributes.length === 0 && !node.ref && !node.state && !boundary && children.length === 1)
+            return children[0];
+        return node;
     };
+    const tree = walk(document.documentElement, 'html', 0, 'n1', false) || { id: 'n1', tag: 'html' };
+    return { page: { formatVersion: 2, url: location.href, title: document.title, tree, capture: { scope: 'light-dom', complete: omissions.length === 0, omissions } }, refs };
 };
-  const rows = captureSnapshotRows();
-  return buildPageSnapshot(rows, location.href, document.title);
+  const encodeCompactPage = function encodeCompactPage(page) {
+    const attributes = [];
+    const states = [];
+    const attributeIDs = new Map(), stateIDs = new Map();
+    const intern = (value, values, ids) => {
+        const key = JSON.stringify(value);
+        let id = ids.get(key);
+        if (id === undefined) {
+            id = values.length;
+            values.push(JSON.parse(key));
+            ids.set(key, id);
+        }
+        return id;
+    };
+    const encode = (node) => {
+        if (node.tag === '#text')
+            return ['#text', node.id, node.text];
+        const properties = {};
+        if (node.attrs)
+            properties.attrs = intern(node.attrs, attributes, attributeIDs);
+        if (node.state)
+            properties.state = intern(node.state, states, stateIDs);
+        if (node.ref)
+            properties.ref = node.ref;
+        return [node.tag, node.id, properties, ...(node.children || []).map(encode)];
+    };
+    const tree = encode(page.tree);
+    return { formatVersion: 3, encoding: 'dom-tree-tuples-v1', url: page.url, title: page.title, tree, attributes, states, capture: JSON.parse(JSON.stringify(page.capture)) };
+};
+  const captured = captureSnapshotTree();
+  return { page: encodeCompactPage(captured.page), refs: captured.refs };
 })()`

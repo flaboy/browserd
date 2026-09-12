@@ -26,7 +26,7 @@ func TestNavigateSnapshotE2E(t *testing.T) {
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 		case "/broken":
-			fmt.Fprint(w, `<body>Extraction failure<script>document.querySelectorAll = () => {throw new Error('forced extraction failure')}</script></body>`)
+			fmt.Fprint(w, `<body>Extraction failure<script>document.createRange = () => {throw new Error('forced extraction failure')}</script></body>`)
 		case "/redirect":
 			http.Redirect(w, r, "/catalog", http.StatusFound)
 		case "/slow":
@@ -71,8 +71,7 @@ func TestNavigateSnapshotE2E(t *testing.T) {
 		if !strings.Contains(string(raw), "Real item $25") {
 			t.Fatal("missing real page facts")
 		}
-		buttons := page["groups"].(map[string]any)["buttons"].(map[string]any)
-		ref := buttons["rows"].([]any)[0].([]any)[0]
+		ref := firstTreeRef(t, page, "button")
 		status, act := mustDoJSON(t, "POST", session+"/act", map[string]any{"action": "click", "ref": ref})
 		if status != 200 {
 			t.Fatalf("returned ref cannot act: %d %+v", status, act)

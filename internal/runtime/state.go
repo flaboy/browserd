@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -23,9 +24,15 @@ type RefState struct {
 }
 
 type PageState struct {
-	URL    string
-	Title  string
-	Groups map[string]any
+	URL           string
+	Title         string
+	Groups        map[string]any
+	FormatVersion int
+	Tree          json.RawMessage
+	Capture       json.RawMessage
+	Encoding      string
+	Attributes    json.RawMessage
+	States        json.RawMessage
 }
 
 type SnapshotState struct {

@@ -132,16 +132,14 @@ GET /v1/sessions/{runtimeSessionId}/snapshot?mode=refs
     "page": {
       "url": "https://www.baidu.com/",
       "title": "百度一下，你就知道",
-      "groups": {
-        "buttons": {
-          "columns": ["ref", "tag", "text"],
-          "rows": [["e13", "BUTTON", "百度一下"]]
-        },
-        "texts": {
-          "columns": ["ref", "tag", "text", "textLength"],
-          "rows": [["t1", "DIV", "点我去文心助手回答，已接入DeepSeek...", 26]]
-        }
-      }
+      "formatVersion": 3,
+      "encoding": "dom-tree-tuples-v1",
+      "attributes": [],
+      "states": [],
+      "tree": ["html", "n1", {}, ["body", "n2", {},
+        ["button", "n3", {"ref": "e1"}, ["#text", "n4", "百度一下"]]
+      ]],
+      "capture": {"scope": "light-dom", "complete": true, "omissions": []}
     }
   },
   "error": null
@@ -150,9 +148,11 @@ GET /v1/sessions/{runtimeSessionId}/snapshot?mode=refs
 
 约束：
 - `snapshot.page` 是唯一页面阅读结构
-- 对外只暴露 `ref`
+- `page.formatVersion: 3` 使用单一紧凑 DOM 树，不同时输出 `groups`
+- 元素为 `[tag,id,properties,...children]`；`properties.attrs/state` 是字典的零基索引
+- `n*` 是本次采集的阅读节点 ID，不是操作 ref
 - `e*` 表示可操作元素
-- `t*` 表示只读文本块
+- 文本作为 `tag: "#text"` 的树节点出现，不注册为点击目标
 
 ### Act
 ```http
@@ -233,12 +233,23 @@ Content-Type: application/json
 
 ### Navigation with a snapshot
 
-Link tables include `image_url` from the link's own descendant image, including
-image-only links. Full resource URLs and hrefs are preserved. Separate image
-and title links can be joined by their exact observed href. Missing sources
-remain empty; browserd does not infer product identity or image addresses.
+The v3 runtime emits a compact pruned DOM tree with ordered text nodes and
+independent images. Full observed resource URLs and hrefs are preserved;
+browserd does not infer product identity, prices or image associations. Generic
+attributes, control states and necessary ancestor boundaries are retained.
+`capture.complete` describes bounded light-DOM capture, not page loading or
+business completeness. Frame/shadow-root boundaries and capture limits are
+explicit in `capture.omissions`. Structural node IDs cannot be used for actions.
 The embedded runtime is generated from the pinned shared `browser-snapshot`
 revision with `bash internal/browser/generate_browser_snapshot_runtime.sh`.
+For an explicit local-source trial, set `BROWSER_SNAPSHOT_SOURCE` to the shared
+package checkout when running that script. It builds that source and records
+the exported runtime SHA-256 in the generated header; it does not update the
+release pin. The published Go SDK supplies `DecodeSnapshotPage` for explicit
+legacy/v2/v3 decoding; release builds and tests use `GOWORK=off` and the versions
+in go.mod. Existing clients that require
+`page.groups` are incompatible until their version-aware readers are migrated;
+do not add empty groups or silently fall back to legacy data to conceal this.
 
 Set `includeSnapshot: true` on `POST /v1/sessions/{runtimeSessionId}/navigate`
 with `waitUntil: "load"` (or omit waitUntil). The response includes
