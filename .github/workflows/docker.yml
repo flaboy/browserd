@@ -38,6 +38,9 @@ jobs:
         run: |
           set -euo pipefail
           export CHROME_BIN="$(command -v google-chrome)"
+          # Initialize the runner's system Chrome before testing browserd sessions.
+          # This is environment setup, not an API retry or cold-start acceptance.
+          timeout 30s "$CHROME_BIN" --headless --no-sandbox --disable-gpu --user-data-dir="$RUNNER_TEMP/chrome-bootstrap" --dump-dom about:blank > "$RUNNER_TEMP/chrome-bootstrap.html" 2> "$RUNNER_TEMP/chrome-bootstrap.log"
           export BROWSERD_PORT=7021 BROWSERD_BASE_URL=http://127.0.0.1:7021
           export BROWSERD_PROFILE_STORE=file BROWSERD_PROFILE_FILE_ROOT="$RUNNER_TEMP/profiles"
           export BROWSERD_WORKDIR="$RUNNER_TEMP/browserd-work"
@@ -49,13 +52,15 @@ jobs:
             if curl --fail --silent "$BROWSERD_BASE_URL/healthz" > /dev/null; then break; fi
             sleep 0.2
           done
-          go test ./e2e -run 'TestNavigateSnapshotE2E|TestSnapshotDOMTreeE2E' -count=1 -v
+          go test ./e2e -run 'TestNavigateSnapshotE2E|TestSnapshotDOMTreeE2E' -count=1 -timeout 3m -v
       - name: Retain browser test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-browser-test
-          path: ${{ runner.temp }}/browserd.log
+          path: |
+            ${{ runner.temp }}/browserd.log
+            ${{ runner.temp }}/chrome-bootstrap.log
 
   docker:
     needs: test
