@@ -28,6 +28,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	cdinput "github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -97,16 +98,26 @@ type PageTable struct {
 	Rows    [][]any  `json:"rows"`
 }
 
+type observedImageRequest struct {
+	URL            string `json:"url"`
+	PageURL        string `json:"page_url"`
+	RefererKnown   bool   `json:"referer_known"`
+	RefererPresent bool   `json:"referer_present"`
+	Referer        string `json:"referer,omitempty"`
+	UserAgent      string `json:"user_agent,omitempty"`
+}
+
 type PageSnapshot struct {
-	URL           string               `json:"url,omitempty"`
-	Title         string               `json:"title,omitempty"`
-	FormatVersion int                  `json:"formatVersion,omitempty"`
-	Tree          json.RawMessage      `json:"tree,omitempty"`
-	Capture       json.RawMessage      `json:"capture,omitempty"`
-	Encoding      string               `json:"encoding,omitempty"`
-	Attributes    json.RawMessage      `json:"attributes,omitempty"`
-	States        json.RawMessage      `json:"states,omitempty"`
-	Groups        map[string]PageTable `json:"groups,omitempty"`
+	URL           string                 `json:"url,omitempty"`
+	Title         string                 `json:"title,omitempty"`
+	FormatVersion int                    `json:"formatVersion,omitempty"`
+	Tree          json.RawMessage        `json:"tree,omitempty"`
+	Capture       json.RawMessage        `json:"capture,omitempty"`
+	Encoding      string                 `json:"encoding,omitempty"`
+	Attributes    json.RawMessage        `json:"attributes,omitempty"`
+	States        json.RawMessage        `json:"states,omitempty"`
+	Groups        map[string]PageTable   `json:"groups,omitempty"`
+	ImageRequests []observedImageRequest `json:"imageRequests,omitempty"`
 }
 
 type SnapshotOutput struct {
@@ -239,6 +250,7 @@ type Service struct {
 	mu                 sync.Mutex
 	browsers           map[string]*activeBrowser
 	pointers           map[string]pointerState
+	imageRequests      map[string][]observedImageRequest
 	pointerSubscribers map[string]map[chan VirtualPointerSnapshot]struct{}
 }
 
@@ -311,6 +323,7 @@ func NewServiceWithOptions(opts ServiceOptions) *Service {
 		captureSnapshot:    captureSnapshotEnvelope,
 		browsers:           map[string]*activeBrowser{},
 		pointers:           map[string]pointerState{},
+		imageRequests:      map[string][]observedImageRequest{},
 		pointerSubscribers: map[string]map[chan VirtualPointerSnapshot]struct{}{},
 	}
 	svc.setFileInputFiles = svc.defaultSetFileInputFiles
@@ -362,6 +375,7 @@ func (s *Service) removeActiveBrowser(runtimeSessionID string) (*activeBrowser, 
 	}
 	delete(s.browsers, runtimeSessionID)
 	delete(s.pointers, runtimeSessionID)
+	delete(s.imageRequests, runtimeSessionID)
 	for ch := range s.pointerSubscribers[runtimeSessionID] {
 		close(ch)
 	}
@@ -553,6 +567,7 @@ func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID stri
 
 	snapshotID := fmt.Sprintf("snap_%d", time.Now().UnixNano())
 	page := envelope.Page
+	page.ImageRequests = s.observedImageRequestsForPage(runtimeSessionID, page.URL)
 	switch page.FormatVersion {
 	case 0, 1:
 		if len(page.Tree) != 0 || len(page.Capture) != 0 {
@@ -606,6 +621,88 @@ func (s *Service) snapshotWithContext(ctx context.Context, runtimeSessionID stri
 		SnapshotID: snapshotID,
 		Page:       page,
 	}, nil
+}
+
+func (s *Service) installImageRequestObserver(runtimeSessionID string, ctx context.Context) error {
+	chromedp.ListenTarget(ctx, func(ev any) {
+		event, ok := ev.(*network.EventRequestWillBeSent)
+		if !ok || event == nil || event.Type != network.ResourceTypeImage || event.Request == nil {
+			return
+		}
+		request := observedImageRequest{
+			URL:          strings.TrimSpace(event.Request.URL),
+			PageURL:      strings.TrimSpace(event.DocumentURL),
+			RefererKnown: true,
+			UserAgent:    headerString(event.Request.Headers, "user-agent"),
+		}
+		if referer := headerString(event.Request.Headers, "referer"); referer != "" {
+			request.RefererPresent = true
+			request.Referer = referer
+		}
+		s.recordObservedImageRequest(runtimeSessionID, request)
+	})
+	return chromedp.Run(ctx, network.Enable())
+}
+
+func headerString(headers network.Headers, name string) string {
+	for key, value := range headers {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			return strings.TrimSpace(v)
+		case fmt.Stringer:
+			return strings.TrimSpace(v.String())
+		default:
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+	}
+	return ""
+}
+
+func (s *Service) recordObservedImageRequest(runtimeSessionID string, request observedImageRequest) {
+	if strings.TrimSpace(runtimeSessionID) == "" || strings.TrimSpace(request.URL) == "" || strings.TrimSpace(request.PageURL) == "" {
+		return
+	}
+	request.URL = strings.TrimSpace(request.URL)
+	request.PageURL = strings.TrimSpace(request.PageURL)
+	request.Referer = strings.TrimSpace(request.Referer)
+	request.UserAgent = strings.TrimSpace(request.UserAgent)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := append(s.imageRequests[runtimeSessionID], request)
+	if len(items) > 1000 {
+		items = items[len(items)-1000:]
+	}
+	s.imageRequests[runtimeSessionID] = items
+}
+
+func (s *Service) observedImageRequestsForPage(runtimeSessionID string, pageURL string) []observedImageRequest {
+	pageURL = strings.TrimSpace(pageURL)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := s.imageRequests[runtimeSessionID]
+	if len(items) == 0 || pageURL == "" {
+		return nil
+	}
+	latest := map[string]observedImageRequest{}
+	order := []string{}
+	for _, item := range items {
+		if strings.TrimSpace(item.PageURL) != pageURL || strings.TrimSpace(item.URL) == "" {
+			continue
+		}
+		key := item.PageURL + "\x00" + item.URL
+		if _, exists := latest[key]; !exists {
+			order = append(order, key)
+		}
+		latest[key] = item
+	}
+	out := make([]observedImageRequest, 0, len(order))
+	for _, key := range order {
+		out = append(out, latest[key])
+	}
+	return out
 }
 
 func jsonObject(raw json.RawMessage) bool {
@@ -2125,6 +2222,19 @@ func (s *Service) ensureBrowser(runtimeSessionID string) (*activeBrowser, error)
 		return nil, err
 	}
 	if err := applyRuntimeOptions(pageCtx, fp, proxy); err != nil {
+		pageCancel()
+		allocCancel()
+		rootCancel()
+		_ = cmd.Process.Kill()
+		if liveRuntime != nil {
+			_ = liveRuntime.Stop(context.Background())
+		}
+		if proxyAdapter != nil {
+			_ = proxyAdapter.Close()
+		}
+		return nil, err
+	}
+	if err := s.installImageRequestObserver(runtimeSessionID, pageCtx); err != nil {
 		pageCancel()
 		allocCancel()
 		rootCancel()
